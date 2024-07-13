@@ -62,12 +62,16 @@ arg.add_argument("-m", "--model_path", type=str, default=None)
 arg.add_argument("--viz", action="store_true")
 arg.add_argument("--auto_scale", action="store_true")
 arg.add_argument("--foreground", action="store_true")
+arg.add_argument("--dataset", type=str, default="LF")
 opt = arg.parse_args()
 
 for index in range(4):
     obj = opt.obj
-    depth_gt_file = os.path.join(opt.data_dir, "{}/depth_gt_{:02d}.npy".format(opt.obj, index))
-    depth_gt = np.ascontiguousarray(np.load(depth_gt_file))
+    if opt.dataset == "Blender":
+        x = x
+    else:
+        depth_gt_file = os.path.join(opt.data_dir, "{}/depth_gt_{:02d}.npy".format(opt.obj, index))
+        depth_gt = np.ascontiguousarray(np.load(depth_gt_file))
     
     if opt.method == "cfnerf":
         depth_pred_file = "./cfnerf_{}/depth_{:03d}.npz".format(obj, index)

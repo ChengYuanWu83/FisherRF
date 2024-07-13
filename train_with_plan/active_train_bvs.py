@@ -1,9 +1,13 @@
 import os
+import sys
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, root_dir)
+
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui, modified_render
-import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
 import uuid
@@ -59,7 +63,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians.training_setup(opt)
     
     # Active View Selection
-    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene)
+    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
+                                      N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
+                                      num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
+                                      save_ply_each_time=args.save_ply_each_time)
     print(f"schema: {schema.load_its}")
     scene.train_idxs = schema.init_views
 
@@ -321,7 +328,13 @@ if __name__ == "__main__":
     parser.add_argument("--filter_out_grad", nargs="+", type=str, default=["rotation"])
     parser.add_argument("--log_every_image", action="store_true", help="log every images during traing")
     parser.add_argument("--override_idxs", default=None, type=str, help="speical test idxs on uncertainty evaluation")
-
+    # experiment
+    parser.add_argument("--iteration_base", type=int, default=2000)
+    parser.add_argument("--num_init_views", type=int, default=1)
+    parser.add_argument("--interval_epochs", type=int, default=100)
+    parser.add_argument("--maximum_view", type=int, default=10)
+    parser.add_argument("--add_view", type=int, default=1)
+    parser.add_argument("--save_ply_each_time", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     if args.log_every_image:

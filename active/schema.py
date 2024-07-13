@@ -15,7 +15,7 @@ class BaseSchema:
     def __init__(self, **kwargs) -> None:
         self.init_views = []
         self.load_its = {}
-
+        self.schema_ckpt = []
 
     def num_views_to_add(self, it:int) -> int:
         return self.load_its.get(it, 0)
@@ -57,7 +57,7 @@ class VNSeqMInplace(BaseSchema):
     Add 1 image at a time
     """
 
-    def __init__(self, dataset_size: int, scene, N: int=20, M: int=1, num_init_views: int=4, interval_epochs=100, **kwargs):
+    def __init__(self, dataset_size: int, scene, N: int=20, M: int=1, num_init_views: int=4, interval_epochs = 100, iteration_base = 2000, save_ply_each_time = 0, **kwargs):
         """
         N: int total views to select
         M: # views to select each time
@@ -71,20 +71,23 @@ class VNSeqMInplace(BaseSchema):
         # NOTE: following the default implementation of scene. 
         # result of getTrainCameras are shuffled in-place, thus we have to rely on train_idxs to index the views
         all_cams = scene.train_cameras[1.0]
+        # set candidate camera
         candidate_views = [i for i in range(len(all_cams)) if i not in self.init_views]
         train_cams = [all_cams[i] for i in self.init_views]
         candidate_cams = [all_cams[i] for i in candidate_views]
 
         selected_idxs = []
 
+        # extend training set untill reach the numbet of initial view accroding the camera pose
         for _ in range(num_init_views_needed):
-            trainT = torch.stack([i.camera_center.cpu() for i in train_cams])
-            candidateT = torch.stack([i.camera_center.cpu() for i in candidate_cams])
+            # trainT = torch.stack([i.camera_center.cpu() for i in train_cams])
+            # candidateT = torch.stack([i.camera_center.cpu() for i in candidate_cams])
 
-            dist_mat = torch.cdist(candidateT, trainT)
-            candidate_dist = reduce(dist_mat, "c t -> c", "min")
+            # dist_mat = torch.cdist(candidateT, trainT)
+            # candidate_dist = reduce(dist_mat, "c t -> c", "min")
 
-            selected_idx = candidate_dist.argmax().item()
+            # selected_idx = candidate_dist.argmax().item()
+            selected_idx = 0
             selected_idxs.append(candidate_views.pop(selected_idx))
 
             # Put selected cam into training cam
@@ -93,7 +96,7 @@ class VNSeqMInplace(BaseSchema):
         self.init_views.extend(selected_idxs)
 
         cur_dataset_size = len(self.init_views)
-        it_base = cur_dataset_size * interval_epochs
+        it_base = iteration_base + (cur_dataset_size * interval_epochs)
         num_views_left = N - len(self.init_views)
         
         if num_views_left > 0:
@@ -101,21 +104,32 @@ class VNSeqMInplace(BaseSchema):
 
             while num_views_left > 0:
                 self.load_its[it_base] = M
+                if save_ply_each_time == 1:
+                    self.schema_ckpt.append(it_base-1)
 
                 cur_dataset_size += M
-                it_base += cur_dataset_size * interval_epochs
+                it_base += M * interval_epochs
                 num_views_left -= M
 
 V20Seq1Inplace = partial(VNSeqMInplace, N=20, M=1, num_init_views=4)
 V10Seq1Inplace = partial(VNSeqMInplace, N=10, M=1, num_init_views=2)
 V20Seq4Inplace = partial(VNSeqMInplace, N=20, M=4, num_init_views=4, interval_epochs=300)
-
-
+#[cyw]
+V02Seq1_uav = partial(VNSeqMInplace, N=2, M=1, num_init_views=1, iteration_base=1000)
+V04Seq1_uav = partial(VNSeqMInplace, N=4, M=1, num_init_views=1)
+V06Seq1_uav = partial(VNSeqMInplace, N=6, M=1, num_init_views=1)
+V08Seq1_uav = partial(VNSeqMInplace, N=8, M=1, num_init_views=1)
+V10Seq1_uav = partial(VNSeqMInplace, N=10, M=1, num_init_views=1)
+V12Seq1_uav = partial(VNSeqMInplace, N=12, M=1, num_init_views=1)
+test = partial(VNSeqMInplace)
+# N=10, M=1, num_init_views=1, iteration_base = 2000, save_ply_each_time = 1
 
 
 schema_dict: Dict[str, BaseSchema] = {'all': All, "debug": V20Seq1Debug,
                                       "v20seq1_inplace": V20Seq1Inplace, "v10seq1_inplace": V10Seq1Inplace,
-                                      "v20seq4_inplace": V20Seq4Inplace,
+                                      "v20seq4_inplace": V20Seq4Inplace, "test": test,
+                                      "V02Seq1_uav": V02Seq1_uav, "V04seq1_uav": V04Seq1_uav, "V06Seq1_uav": V06Seq1_uav,
+                                      "V08Seq1_uav": V08Seq1_uav, "V10Seq1_uav": V10Seq1_uav, "V12Seq1_uav": V12Seq1_uav
                                       }
 
 override_test_idxs_dict: Dict[str, List[int]] = {"basket": list(range(42, 50,2)), "africa": list(range(6, 14, 2)),

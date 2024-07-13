@@ -1,0 +1,1 @@
+Namespace(sh_degree=2, source_path='/home/nmsl/LF/statue', model_path='test-lf-statue', images='images', resolution=2, white_background=False, data_device='cuda', eval=True)

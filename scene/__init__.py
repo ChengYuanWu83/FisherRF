@@ -82,7 +82,7 @@ class Scene:
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
-
+            # print(f"test_cam:{scene_info.test_cameras}") #[cyw]
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path,
                                                            "point_cloud",
@@ -134,3 +134,35 @@ class Scene:
 
             self.all_train_set.update([base_idx + i for i, _ in enumerate(load_idxs)])
             self.train_cameras[scale].extend(inflated_cams)
+
+    def add_new_cameras(self, args, json_path): #[cyw]
+        resolution_scales=[1.0]
+        if os.path.exists(os.path.join(json_path, "transforms_train.json")):
+            print("Found transforms_train.json file, assuming Blender data set!")
+            scene_info = sceneLoadTypeCallbacks["Blender"](json_path, args.white_background, args.eval)
+        else:
+            assert False, "Could not recognize scene type!"
+
+
+        # make camera json
+        json_cams = []
+        camlist = []
+        if scene_info.test_cameras:
+            camlist.extend(scene_info.test_cameras)
+        if scene_info.train_cameras:
+            camlist.extend(scene_info.train_cameras)
+        for id, cam in enumerate(camlist):
+            json_cams.append(camera_to_JSON(id, cam))
+        with open(os.path.join(self.model_path, "cameras.json"), 'w') as f:
+            json.dump(json_cams, f)
+        
+        random.shuffle(scene_info.train_cameras)
+
+        self.cameras_extent = scene_info.nerf_normalization["radius"]
+
+        for resolution_scale in resolution_scales:
+            print("Re-Loading Training Cameras")
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+
+        
+

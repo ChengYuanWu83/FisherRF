@@ -1,31 +1,55 @@
+import rospy
 import os
-import torch
-from random import randint
-from utils.loss_utils import l1_loss, ssim
-from gaussian_renderer import render, network_gui, modified_render
 import sys
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, root_dir)
+
+import yaml
+import argparse
+from planner import get_planner
+from planner.utils import uniform_sampling, xyz_to_view
+import numpy as np
+import scipy.spatial as spatial
+from datetime import datetime
+import imageio
+import glob
+#from dotmap import DotMap
+import torch
+#from neural_rendering.utils import util
+#from neural_rendering.evaluation.pretrained_model import PretrainedModel
+import pandas
+import torch.nn.functional as F
+# Gaussian training
+from random import randint
 from scene import Scene, GaussianModel
-from utils.general_utils import safe_state
-import uuid
 from tqdm import tqdm
-from utils.image_utils import psnr
-from argparse import ArgumentParser, Namespace
+from utils.loss_utils import l1_loss, ssim
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from active.schema import schema_dict
-from utils.loss_utils import ssim
-from lpipsPyTorch import lpips, lpips_func
-from active import methods_dict
-import wandb
+from gaussian_renderer import render, network_gui
+from utils.general_utils import safe_state
+from argparse import ArgumentParser, Namespace
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+# training manager
+import wandb
 from utils.cluster_manager import ClusterStateManager
+# NBVS
+from active.schema import schema_dict
+from lpipsPyTorch import lpips, lpips_func
+from utils.image_utils import psnr
 
 csm = ClusterStateManager()
 
-@torch.no_grad()
+planner_title = {
+    "max_distance": "Max. View Distance",
+    "random": "Random",
+#    "neural_nbv": "Ours",
+}
+
 def save_checkpoint(gaussians, iteration, scene, base_iter=0, save_path=None, save_last=True):
     ckpt_dict = {"model_params": gaussians.capture(), "first_iter": iteration, "train_idx": scene.train_idxs, "base_iter": base_iter}
 
@@ -50,21 +74,92 @@ def load_checkpoint(ckpt_path: str, gaussians, scene, opt, ignore_train_idxs=Fal
     return first_iter, base_iter
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, args):
+def setup_random_seed(seed):
+    np.random.seed(seed)
+
+
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+    # planning experiment in simulator using baseline planners and our planner
+
+    setup_random_seed(10)
+    # planner_type_list = ["max_distance", "random"]
+
+    experiment_path = dataset.source_path
+
+
+    # experiment_path = os.path.join(
+    #     root_dir,
+    #     "experiments",
+    #     "simulator",
+    #     datetime.now().strftime("%d-%m-%Y-%H-%M"),
+    # )
+    os.makedirs(experiment_path, exist_ok=True)
+
+    print("---------- planning ----------")
+    
+    # initialize planning with 2 same views
+    init_view = []
+    starting_view = np.array([1.0, 0.0, 0.5])
+    init_view.append(xyz_to_view(xyz=starting_view, radius=2))
+
+    # random_initial_view = []
+    # for _ in range(1):
+    #     random_initial_view.append(
+    #         uniform_sampling(radius=2, phi_min=0.15)
+    #     )  # hard-coded, should be the same for config file
+    #     print(f"random_initial_view: {random_initial_view}")
+
+    # [cyw]: setup planner type
+    planner_type = args.planner_type
+
+    # find planner configuration file
+    print(
+        f"---------- {planner_type} planner ----------\n"
+    )
+    planner_cfg_path = os.path.join(
+        "planner/config", f"{planner_type}_planner.yaml"
+    )
+    assert os.path.exists(planner_cfg_path)
+    with open(planner_cfg_path, "r") as config_file:
+        planner_cfg = yaml.safe_load(config_file)
+
+    planner_cfg.update(args.__dict__)
+    planner_cfg["planner_type"] = planner_type
+    planner_cfg["experiment_path"] = experiment_path
+    planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
+    print(planner_cfg)
+    nbv_planner = get_planner(planner_cfg, args)
+    if args.num_init_views == 1 :
+        nbv_planner.start(initial_view=init_view)
+        nbv_planner.store_train_set(0)
+        nbv_planner.store_test_set()
+    
+
+    # nbv = nbv_planner.plan_next_view()
+    # nbv_planner.move_sensor(nbv)
+
+
+    dataset.source_path = nbv_planner.get_record_path()
+    print(f"dataset.source_path: {dataset.source_path}" )
+    #[cyw]: Gaussian training
     first_iter = 0
     base_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
-    
-    # Active View Selection
-    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene)
+
+    #[cyw]: setup schema
+    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
+                                      N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
+                                      num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
+                                      save_ply_each_time=args.save_ply_each_time)
     print(f"schema: {schema.load_its}")
-    scene.train_idxs = schema.init_views
+    #[cyw]: change to saving ply when adding the view
+    saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
+    print(saving_iterations)
 
-    active_method = methods_dict[args.method](args)
-
+    # print(f"scene.train_idxs: {scene.train_idxs}")
     init_ckpt_path = f"{args.model_path}/init.ckpt"
     if checkpoint: # this is to continue training in SLURM after requeue
         if os.path.exists(checkpoint):
@@ -74,18 +169,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     if first_iter == 0: # maybe init_ckpt has been save if preempted
         save_checkpoint(gaussians, first_iter, scene, base_iter, save_path=init_ckpt_path, save_last=False)
-
+    
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+    
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
-
+    
     viewpoint_stack = None
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
+        
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -100,16 +196,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     break
             except Exception as e:
                 network_gui.conn = None
-
+        
         num_views = schema.num_views_to_add(iteration)
         if num_views > 0:
             try:
                 # For sectioned training
                 candidate_views_filter = getattr(schema, "candidate_views_filter")[iteration] if hasattr(schema, "candidate_views_filter") else None
                 scene.candidate_views_filter = candidate_views_filter
-                
                 # Because selection is time consumeing ({cyw}:uncertainty estimation callback function)
-                selected_views = active_method.nbvs(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
+                # [cyw]: select nbv
+                if args.planner_type == "fisher":
+                    nbv = nbv_planner.plan_next_view(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
+                else:
+                    nbv = nbv_planner.plan_next_view()
+
+                nbv_planner.move_sensor(nbv)
+                print(f"ITER {iteration}: NBV: {nbv}")
+                nbv_planner.store_train_set(len(scene.train_idxs))
+
+                #selected_views = active_method.nbvs(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
             except RuntimeError as e:
                 print(e)
                 print("selector exited early")
@@ -117,9 +222,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 save_checkpoint(gaussians, iteration - 1, scene)
                 csm.requeue()
 
-            print(f"ITER {iteration}: selected views: {selected_views}")
-            scene.train_idxs.extend(selected_views)
-            print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
+            #print(f"ITER {iteration}: selected views: {selected_views}")
+
+            #scene.train_idxs.extend([len(scene.train_idxs)])
+            #scene.add_new_cameras(args, nbv_planner.record_path)
+            
+            # print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
 
             gaussians.optimizer.zero_grad(set_to_none = True)
 
@@ -132,10 +240,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if iteration > args.sh_up_after and iteration % args.sh_up_every == 0:
             gaussians.oneupSHdegree()
-
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
+        # print(f"viewpoint_stack: {viewpoint_stack}")
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
         # Render
@@ -171,9 +279,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
                             testing_iterations, scene, render, (pipe, background), before_selection=before_selection, 
                             log_every_image=args.log_every_image)
-            if (iteration in saving_iterations):
+            if (iteration in saving_iterations): 
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+                scene.save(iteration * args.num_init_views) #[cyw]: change to avoid same name
 
             # Densification
             cur_iter = iteration - base_iter
@@ -188,7 +296,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if cur_iter % opt.opacity_reset_interval == 0 or (dataset.white_background and cur_iter == opt.densify_from_iter):
                     print(f"\nreset_opacity at {cur_iter}, base_iter")
-                    gaussians.reset_opacity()
+                    gaussians.reset_opacity() #[cyw]
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -198,8 +306,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if (iteration in checkpoint_iterations):
             save_checkpoint(gaussians, iteration, scene)
     wandb.finish()
-
-        
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -284,18 +390,74 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
         torch.cuda.empty_cache()
 
-import socket
-from contextlib import closing
-
-def find_free_port():
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
 
 if __name__ == "__main__":
-    # Set up command line argument parser
+
+    rospy.init_node("simulator_experiment")
+
     parser = ArgumentParser(description="Training script parameters")
+
+    parser.add_argument(
+        "--planner_type", "-P", type=str, default="random", help="planner_type"
+    )
+
+    parser.add_argument(
+        "--model_name",
+        "-M",
+        type=str,
+        #required=True,
+        help="model name of pretrained model",
+    )
+
+    # parser.add_argument(
+    #     "--test_data_path",
+    #     "-TD",
+    #     type=str,
+    #     required=True,
+    #     help="data path",
+    # )
+
+    # mandatory arguments
+    parser.add_argument(
+        "--experiment_id",
+        type=int,
+        default=1,
+        help="experiment id",
+    )
+    # arguments with default values
+    parser.add_argument(
+        "--nviews", "-nv", type=int, default=5, help="number of reference views"
+    )
+    parser.add_argument(
+        "--planning_budget",
+        "-BG",
+        type=int,
+        default=20,
+        help="maximal measurments for the mission",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="config file path",
+    )
+    parser.add_argument(
+        "--gpu_id",
+        type=str,
+        default="0",
+        help="gpu to use, space delimited",
+    )
+
+    parser.add_argument(
+        "--evaluation_only", action="store_true", help="evaluation mode"
+    )
+    parser.add_argument(
+        "--experiment_path",
+        type=str,
+        default="not defined",
+        help="must be defined in evaluation mode",
+    )
+    # 3DGS args
     lp = ModelParams(parser) #args: model_path
     op = OptimizationParams(parser) #args: iterations
     pp = PipelineParams(parser)
@@ -304,51 +466,43 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[15_000, 20_000, 25_000, 30_000]) # the iteration that evaluate metrics
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2700, 7_000, 30_000]) # the iteration that save 3DGS.ply
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000]) # the iteration that save 3DGS.ply
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[]) # the iteration that save 3DGS ckpt
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    # Flags for view selections
-    parser.add_argument("--method", type=str, default="rand")
+    
+    # fisherrf
     parser.add_argument("--schema", type=str, default="all")
-    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--reg_lambda", type=float, default=1e-6)
-    parser.add_argument("--I_test", action="store_true", help="Use I test to get the selection base")
-    parser.add_argument("--I_acq_reg", action="store_true", help="apply reg_lambda to acq H too")
-    parser.add_argument("--sh_up_every", type=int, default=5_000, help="increase spherical harmonics every N iterations")
-    parser.add_argument("--sh_up_after", type=int, default=-1, help="start to increate active_sh_degree after N iterations")
+    parser.add_argument("--sh_up_every", type=int, default=1_000, help="increase spherical harmonics every N iterations")
+    parser.add_argument("--sh_up_after", type=int, default=-1, help="start to increate active_sh_degree after N iterations")    
     parser.add_argument("--min_opacity", type=float, default=0.005, help="min_opacity to prune")
-    parser.add_argument("--filter_out_grad", nargs="+", type=str, default=["rotation"])
     parser.add_argument("--log_every_image", action="store_true", help="log every images during traing")
-    parser.add_argument("--override_idxs", default=None, type=str, help="speical test idxs on uncertainty evaluation")
+    parser.add_argument("--filter_out_grad", nargs="+", type=str, default=["rotation"])
+
+    # experiment
+    parser.add_argument("--iteration_base", type=int, default=2000)
+    parser.add_argument("--num_init_views", type=int, default=1)
+    parser.add_argument("--interval_epochs", type=int, default=100)
+    parser.add_argument("--maximum_view", type=int, default=10)
+    parser.add_argument("--add_view", type=int, default=1)
+    parser.add_argument("--save_ply_each_time", action="store_true")
+
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
-    if args.log_every_image:
-        args.test_iterations = []
-    if args.iterations not in args.test_iterations:
-        args.test_iterations.append(args.iterations)
-    
-    if args.start_checkpoint is None:
-        args.start_checkpoint = args.model_path + "/last.pth"
+    args = parser.parse_args()
 
     print("Optimizing " + args.model_path)
 
-    wandb.init(project='active', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
-
+    wandb.init(project='Ours', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
     # Initialize system state (RNG)
-    safe_state(args.quiet, seed=args.seed)
+    safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    args.port = find_free_port()
-    print(f"GUI at: {args.ip}:{args.port}")
-
-
-
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from,
-             args)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done
     print("\nTraining complete.")

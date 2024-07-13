@@ -1,6 +1,6 @@
 *.pyc
 .vscode
-output
+exp_results
 build
 diff/diff_rasterization/diff_rast.egg-info
 diff/diff_rasterization/dist

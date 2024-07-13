@@ -23,13 +23,19 @@ class HRegSelector(torch.nn.Module):
     
     def nbvs(self, gaussians, scene: Scene, num_views, pipe, background, exit_func) -> List[int]:
         candidate_views = list(deepcopy(scene.get_candidate_set()))
-
+        # print(f"candidate_views {candidate_views}")
         viewpoint_cams = scene.getTrainCameras().copy()
 
         if self.I_test == True:
             viewpoint_cams = scene.getTestCameras()
 
         params = gaussians.capture()[1:7]
+        # [cyw]:check what is param
+        # for i, element in enumerate(params):
+        #     if isinstance(element, torch.Tensor):
+        #         print(f"Size of tensor {i}: {element.size()}")
+        #     else:
+        #         print(f"Element {i} is not a tensor")
         params = [p for i, p in enumerate(params) if i not in self.filter_out_idx]
 
         # off load to cpu to avoid oom with greedy algo
@@ -39,6 +45,7 @@ class HRegSelector(torch.nn.Module):
         H_train = torch.zeros(sum(p.numel() for p in params), device=params[0].device, dtype=params[0].dtype)
 
         candidate_cameras = scene.getCandidateCameras()
+        print(f"candidate_cameras: {candidate_cameras[0]}")
         # Run heesian on training set
         for cam in tqdm(viewpoint_cams, desc="Calculating diagonal Hessian on training views"):
             if exit_func():
@@ -55,10 +62,11 @@ class HRegSelector(torch.nn.Module):
             gaussians.optimizer.zero_grad(set_to_none = True) 
 
         H_train = H_train.to(device)
-
+        # Run heesian on candidates set if select 1 view
         if num_views == 1:
             return self.select_single_view(H_train, candidate_cameras, candidate_views, gaussians, pipe, background, params, exit_func)
-
+        
+        # Run heesian on candidates set if select > 1 views
         H_candidates = []
         for idx, cam in enumerate(tqdm(candidate_cameras, desc="Calculating diagonal Hessian on candidate views")):
             if exit_func():
@@ -124,5 +132,14 @@ class HRegSelector(torch.nn.Module):
             acq_scores *= -1
 
         _, indices = torch.sort(acq_scores, descending=True)
-        selected_idxs = [candidate_views[i] for i in indices[:num_views].tolist()]
+        # [cyw]: selected views 
+        # test loop: 
+        #for i in indices[-1:].tolist(): # pick least score
+        for i in indices[:num_views].tolist(): # pick highest score
+            selected_idxs = [candidate_views[i]]
+            # [cyw]: print selected view index and its score
+            print(f"sorted acq_scores: {_.tolist()}")
+            print(f"indices: {indices.tolist()}")
+            print(f"selected_idxs: {selected_idxs}")
+            print(f"acq_scores: {acq_scores[i].tolist()}")
         return selected_idxs

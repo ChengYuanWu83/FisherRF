@@ -69,3 +69,27 @@ class MiniCam:
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
 
+#[cyw]: esign to fit the modified_render in fisher planner
+class FakeCam:
+    def __init__(self, R, T, FoVx, FoVy, width, height,
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
+                 ):
+        self.R = R
+        self.T = T
+        self.FoVx = FoVx
+        self.FoVy = FoVy
+        self.image_width = width
+        self.image_height = height 
+
+
+        self.trans = trans
+        self.scale = scale
+
+        self.zfar = 100.0 #[cyw]: might change the znear and zfar
+        self.znear = 0.01
+
+        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda() 
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+

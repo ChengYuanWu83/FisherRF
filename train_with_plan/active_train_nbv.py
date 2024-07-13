@@ -1,9 +1,14 @@
 import os
+import sys
+
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, root_dir)
+
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui, modified_render
-import sys
+
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
 import uuid
@@ -15,7 +20,10 @@ from active.schema import schema_dict
 from utils.loss_utils import ssim
 from lpipsPyTorch import lpips, lpips_func
 from active import methods_dict
-import wandb
+import shutil
+import json
+
+# import wandb
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -24,6 +32,52 @@ except ImportError:
 from utils.cluster_manager import ClusterStateManager
 
 csm = ClusterStateManager()
+
+# [cyw]
+def delete_unwanted_images(directory, keep_indices):
+    print("deleting the previous candidates")
+    train_path = os.path.join(directory, "train")
+    if not os.path.isdir(train_path):
+        print(f"{train_path} doesn't exist")
+        return
+
+    files = os.listdir(train_path)
+    keep_files = {f"r_{i:04d}.png" for i in keep_indices}
+    for f in files:
+        if f.endswith('.png') and f not in keep_files:
+            file_path = os.path.join(train_path, f)
+            os.remove(file_path)
+    print(f"delete unwanted images")
+
+    transform_json_file = (f"{directory}/transforms_train.json")
+    if os.path.isfile(transform_json_file):
+        # Read the existing data
+        with open(transform_json_file, 'r') as f:
+            record_dict = json.load(f)
+            original_frames_num = len(record_dict["frames"])
+            new_frames_num = len(keep_indices)
+            index_new = 0
+            for idx in range(original_frames_num):
+                if idx in keep_indices:
+                    new_file_path = (f"./train/r_{index_new:04d}")
+                    record_dict["frames"][idx]["file_path"] = new_file_path
+                    index_new+=1
+                else:
+                    record_dict["frames"][idx]["file_path"] = ""
+            print(f"delete unwanted index in transform")
+            # print(record_dict["frames"])
+            record_dict["frames"] = [item for item in record_dict["frames"] if item["file_path"] != ""]
+        with open(transform_json_file, 'w') as f:
+            json.dump(record_dict, f, indent=4)
+    else:
+        print(f"{transform_json_file} doesn't exist")
+
+
+    for idx, f in enumerate(sorted(os.listdir(train_path))):
+        new_file_name = (f"r_{idx:04d}.png")
+        if new_file_name != f:
+            shutil.move(os.path.join(train_path, f), os.path.join(train_path, new_file_name))
+            print(f"rename file: {f} to {new_file_name}")
 
 @torch.no_grad()
 def save_checkpoint(gaussians, iteration, scene, base_iter=0, save_path=None, save_last=True):
@@ -59,8 +113,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians.training_setup(opt)
     
     # Active View Selection
-    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene)
+    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
+                                      N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
+                                      num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
+                                      save_ply_each_time=args.save_ply_each_time)
     print(f"schema: {schema.load_its}")
+    print(f"train_idxs: {scene.train_idxs}")
+    #[cyw]: change to saving ply when adding the view
+    saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
+    print(saving_iterations)
     scene.train_idxs = schema.init_views
 
     active_method = methods_dict[args.method](args)
@@ -120,6 +181,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             print(f"ITER {iteration}: selected views: {selected_views}")
             scene.train_idxs.extend(selected_views)
             print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
+            delete_unwanted_images((f"{dataset.source_path}"), scene.train_idxs)
 
             gaussians.optimizer.zero_grad(set_to_none = True)
 
@@ -197,7 +259,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         if (iteration in checkpoint_iterations):
             save_checkpoint(gaussians, iteration, scene)
-    wandb.finish()
+    # wandb.finish()
 
         
 
@@ -250,18 +312,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and ((idx < 5) or log_every_image):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(idx), image[None], global_step=iteration)
-                        log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
+                        # log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(idx), gt_image[None], global_step=iteration)
-                            log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
+                            # log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                     ssim_test += ssim(image, gt_image).mean().double()
                     lpips.to(image.device)
                     lpips_test += lpips(image, gt_image).mean().double()
 
-                if log_every_image:
-                    wandb.log(log_images, step=iteration)
+                # if log_every_image:
+                    # wandb.log(log_images, step=iteration)
 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
@@ -276,12 +338,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - lpips', lpips_test, iteration)
                 log_dict = {config['name'] + '/l1_loss': l1_test, config['name'] + '/psnr': psnr_test,
                             config['name'] + '/ssim': ssim_test, config['name'] + '/lpips': lpips_test,}
-                wandb.log(log_dict, step=iteration)
+                # wandb.log(log_dict, step=iteration)
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
-            wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
+            # wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
         torch.cuda.empty_cache()
 
 import socket
@@ -304,7 +366,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[15_000, 20_000, 25_000, 30_000]) # the iteration that evaluate metrics
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2700, 7_000, 30_000]) # the iteration that save 3DGS.ply
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000]) # the iteration that save 3DGS.ply
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[]) # the iteration that save 3DGS ckpt
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -322,6 +384,14 @@ if __name__ == "__main__":
     parser.add_argument("--log_every_image", action="store_true", help="log every images during traing")
     parser.add_argument("--override_idxs", default=None, type=str, help="speical test idxs on uncertainty evaluation")
 
+    # experiment
+    parser.add_argument("--iteration_base", type=int, default=2000)
+    parser.add_argument("--num_init_views", type=int, default=1)
+    parser.add_argument("--interval_epochs", type=int, default=100)
+    parser.add_argument("--maximum_view", type=int, default=10)
+    parser.add_argument("--add_view", type=int, default=1)
+    parser.add_argument("--save_ply_each_time", action="store_true")
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     if args.log_every_image:
@@ -334,7 +404,7 @@ if __name__ == "__main__":
 
     print("Optimizing " + args.model_path)
 
-    wandb.init(project='active', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
+    # wandb.init(project='active', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
 
     # Initialize system state (RNG)
     safe_state(args.quiet, seed=args.seed)

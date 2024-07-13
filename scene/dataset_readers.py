@@ -186,6 +186,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
+        #print(contents) #[cyw]
         fovx = contents["camera_angle_x"]
 
         frames = contents["frames"]

@@ -1,4 +1,4 @@
-name: gaussian
+name: gaussian_fisher
 channels:
   - pytorch
   - nvidia
@@ -9,14 +9,18 @@ dependencies:
   - plyfile=0.8.1
   - python=3.10
   - pip
-  - pytorch
-  - torchaudio
-  - torchvision
+  - pytorch==1.13.1
+  - torchaudio==0.13.1
+  - torchvision==0.14.1
   - tqdm
   - jupyter
+  - Pillow==10.2.0
+  - scipy==1.12.0
+  - wandb==0.15.12
   - pip:
-      einops
-      ipdb
+      - einops==0.7.0
+      - ipdb
+      - pymeshlab==2023.12.post1
     #  - pip:
     #    - submodules/diff-gaussian-rasterization
     #    - submodules/simple-knn

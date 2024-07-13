@@ -1,0 +1,19 @@
+###### configuration for random_planner ######
+action_space:
+  min_height: 0.3
+  radius: 3
+
+simulation_bridge:
+  camera_type: uav/camera/left
+  sensor_noise: 2 # std of rgb measurment
+
+scene_range: [0.1, 4]
+initial_num: 1
+# step_phi: 0.5
+# step_theta: 0.5
+planning_type: local
+view_change: 1.05 # 60 degree = 1.05 radian
+num_candidates: 50
+random_distance: false
+initial_type: random
+

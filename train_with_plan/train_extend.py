@@ -8,13 +8,15 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+import sys
 import os
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, root_dir)
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
-import sys
+
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
 import uuid
@@ -27,6 +29,12 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+# [cyw]: record the csv in order to decide iterations time
+import csv
+csv_file = 'training_loss.csv'
+with open(csv_file, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['iteration', 'loss', 'iteration_times'])
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -89,6 +97,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss.backward()
 
+
         iter_end.record()
 
         with torch.no_grad():
@@ -96,6 +105,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+
+                # [cyw]: recording loss
+                with open(csv_file, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([iteration, ema_loss_for_log, iter_start.elapsed_time(iter_end)])
+
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -199,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2000, 7_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
