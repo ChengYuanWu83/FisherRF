@@ -96,7 +96,24 @@ def view_to_pose(view, radius):
     pose[:3, :3] = rotation
     return pose
 
+def view_to_position_and_rotation(view, radius): #[cyw]
+    phi, theta = view
 
+    # phi should be within [min_phi, 0.5*np.pi)
+    if phi >= 0.5 * np.pi:
+        phi = np.pi - phi
+
+    # pose = np.eye(4)
+    x = radius * np.cos(theta) * np.cos(phi)
+    y = radius * np.sin(theta) * np.cos(phi)
+    z = radius * np.sin(phi)
+
+    translation = np.array([x, y, z])
+    rotation = [theta, -phi, np.pi]
+
+    # pose[:3, -1] = translation
+    # pose[:3, :3] = rotation
+    return translation, rotation
 
 
 def view_to_pose_batch(views, radius):
