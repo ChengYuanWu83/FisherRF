@@ -19,7 +19,7 @@ do
 done
 
 # collect dataset
-python ./train_with_plan/circular_capture.py --experiment_path $DATASET_PATH --radius 3 
+python ./train_with_plan/circular_capture.py --experiment_path $DATASET_PATH --radius 3 --views_num 30
 python ./train_with_plan/random_capture.py --experiment_path $DATASET_PATH\
         --set_type test --radius 3 --candidate_views_num 50
 for i in "${arr[@]}"

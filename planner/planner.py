@@ -8,7 +8,7 @@ import imageio.v2 as imageio
 import yaml
 import json
 from geometry_msgs.msg import PoseStamped, Pose
-
+from scipy.spatial.transform import Rotation as R
 
 class Planner:
     def __init__(self, cfg):
@@ -74,7 +74,7 @@ class Planner:
         # rospy.signal_shutdown("shut down ros node")
 
     def move_sensor(self, view):
-        pose = utils.view_to_pose(view, self.radius)
+        pose = utils.view_to_pose_with_target_point(view, self.radius)
         pub_pose = Pose()
         pub_pose = (self.simulator_bridge.move_uav(pose, self.record_path)).pose #[cyw]:change move_camera to move_uav
         
@@ -87,6 +87,7 @@ class Planner:
         while(self.simulator_bridge.check_if_uav_arrive(pub_pose)==0): #[cyw]: check if uav reach
             print("flying")
             time.sleep(0.1)
+        time.sleep(2.5)
 
         # rgb, depth, captured_pose = self.simulator_bridge.get_image()
         # self.record_step(view, pose, rgb, depth)
@@ -160,9 +161,9 @@ class Planner:
                 json.dump(record_dict, f, indent=4)
 
 
-    def store_train_set(self,i):
+    def store_train_set(self):
         print("------ record experiment data ------\n")
-        time.sleep(0.5)
+        # time.sleep(0.5)
 
         os.makedirs(self.record_path, exist_ok=True)
 
@@ -170,18 +171,8 @@ class Planner:
         os.makedirs(train_path, exist_ok=True)
         depths_path = os.path.join(self.record_path, "depths")
         os.makedirs(depths_path, exist_ok=True)
-
+        
         rgb, depth, captured_pose = self.simulator_bridge.get_image()
-        #[cyw]: change i to the index of image
-        train_image_file = (f"./train/r_{i:04d}")
-        imageio.imwrite(f"{train_path}/r_{i:04d}.png", rgb)
-
-
-        if depth != None:
-            with open(f"{depths_path}/depth_{i:04d}.npy", "wb") as f:
-                depth_array = np.array(depth, dtype=np.float32)
-                np.save(f, depth_array)
-
         # with open(f"{self.record_path}/trajectory.npy", "wb") as f:
         #     np.save(f, self.trajectory)
 
@@ -200,13 +191,36 @@ class Planner:
             record_dict = utils.get_camera_json(self.camera_info)
             with open(transform_json_file, "w") as f:
                 json.dump(record_dict, f, indent=4)
-            
-        transformation = np.array(
-        [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
-        )  # transform gazebo coordinate to opengl format
+        i = len(record_dict["frames"])  
+                
+        #[cyw]: change i to the index of image
+        train_image_file = (f"./train/r_{i:04d}")
+        imageio.imwrite(f"{train_path}/r_{i:04d}.png", rgb)
+
+
+        if depth != None:
+            with open(f"{depths_path}/depth_{i:04d}.npy", "wb") as f:
+                depth_array = np.array(depth, dtype=np.float32)
+                np.save(f, depth_array)  
+        # transformation = np.array(
+        # [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
+        # )  # transform gazebo coordinate to opengl format
+        # transform = utils.quaternion_to_rotation_matrix(captured_pose)
+        # print(transform)
+        # opengltransform = transform @ transformation
+
         transform = utils.quaternion_to_rotation_matrix(captured_pose)
-        print(transform)
-        opengltransform = transform @ transformation
+        opengltransform = np.eye(4)
+        euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
+        print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+        new_euler = np.empty(3)
+        new_euler[0] = euler[1] + (np.pi/2)
+        new_euler[1] = euler[0]
+        new_euler[2] = euler[2] - (np.pi/2)
+        opengl_rotation =  R.from_euler('xyz', [new_euler[0] , new_euler[1], new_euler[2]]).as_matrix()
+        opengltransform[:3, -1] = transform[:3, -1]
+        opengltransform[:3, :3] = opengl_rotation
+
         data_frame = {
             "file_path": train_image_file,
             "transform_matrix": opengltransform.tolist(),

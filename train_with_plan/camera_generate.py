@@ -6,7 +6,7 @@ sys.path.insert(0, root_dir)
 
 from argparse import ArgumentParser
 import numpy as np
-from planner.utils import quaternion_to_rotation_matrix, xyz_to_view, random_view, view_to_position_and_rotation, focal_len_to_fov, view_to_pose
+from planner.utils import view_to_pose_from_2_points, xyz_to_view, random_view, view_to_position_and_rotation, focal_len_to_fov, view_to_pose
 import json
 import csv
 
@@ -80,12 +80,12 @@ def plan(experiment_path, candidate_views_num, radius):
     with open(csv_file, mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['index','x', 'y', 'z', 'qx', 'qy', 'qz'])
+            writer.writerow(['index','x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
 
         for i, view in enumerate(view_list):
             translation, rotation = view_to_position_and_rotation(view, radius) #[cyw]: pose format
             #write json
-            pose_matrix = view_to_pose(view, radius)
+            pose_matrix = view_to_pose_from_2_points(view, radius)
             j = len(record_dict["frames"])
             transformation = np.array(
             [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]

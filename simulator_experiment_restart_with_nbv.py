@@ -212,7 +212,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 nbv_planner.move_sensor(nbv)
                 print(f"ITER {iteration}: NBV: {nbv}")
-                nbv_planner.store_train_set(len(scene.train_idxs))
+                nbv_planner.store_train_set()
 
                 #selected_views = active_method.nbvs(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
             except RuntimeError as e:

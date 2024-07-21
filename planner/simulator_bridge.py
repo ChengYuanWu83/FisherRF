@@ -1,6 +1,6 @@
 import rospy
 from gazebo_msgs.msg import ModelState
-from geometry_msgs.msg import PoseStamped, Pose
+from geometry_msgs.msg import PoseStamped, Pose, TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 from . import utils
@@ -19,6 +19,7 @@ class SimulatorBridge:
         self.current_pose = None
         self.camera_type = cfg["camera_type"]
         self.sensor_noise = cfg["sensor_noise"]
+        # self.command_pose = None
 
         self.get_simulator_camera_info()
         #[cyw]:change pose_pub which publish camera_info to publish uav pose
@@ -27,9 +28,13 @@ class SimulatorBridge:
             "/gazebo/set_model_state", ModelState, queue_size=1, latch=True
         )
         """
+        #[cyw]:uavpose topic "/firefly/ground_truth/pose" ,camera_pose topic "/firefly/transform_stamped"
         self.current_pose_sub = rospy.Subscriber(
-            "/firefly/ground_truth/pose", Pose, self.update_current_pose
+            "/firefly/transform_stamped", TransformStamped, self.update_current_pose
         )
+        # self.current_pose_sub = rospy.Subscriber(
+        #     "/firefly/ground_truth/pose", Pose, self.update_current_pose
+        # )
 
         self.pose_pub = rospy.Publisher(
             "/nbv/uav_pose", PoseStamped, queue_size=1, latch=True
@@ -112,7 +117,9 @@ class SimulatorBridge:
         uav_pose_msg.pose.orientation.w = quaternion[3]
         uav_pose_msg.header.stamp = rospy.Time.now()
 
-        print(uav_pose_msg)
+        # self.command_pose = uav_pose_msg
+
+        # print(uav_pose_msg)
         #[cyw]: Save a pose to a CSV file.
         os.makedirs(record_path, exist_ok = True)
         csv_file = (f"{record_path}/target_uav_pose.csv")
@@ -138,11 +145,14 @@ class SimulatorBridge:
     def update_current_pose(self, data): #[cyw]
         self.current_pose = data
 
-    def get_image(self):
-        captured_pose = self.current_pose
+    def get_image(self): # [cyw]   
+        # the camera pose
+        captured_pose = self.current_pose    
         if self.current_rgb is None:
             print("wait for image")
-            time.sleep(0.1)
+            time.sleep(0.01)
+
+
         rgb = self.cv_bridge.imgmsg_to_cv2(self.current_rgb, "rgb8")
         # rgb = np.array(rgb, dtype=float)
 
@@ -161,16 +171,33 @@ class SimulatorBridge:
     #[cyw]:
     def check_if_uav_arrive(self, desired_pose):
         # Calculate the distance to the desired pose
-        distance = math.sqrt(
-            (desired_pose.position.x - self.current_pose.position.x) ** 2 +
-            (desired_pose.position.y - self.current_pose.position.y) ** 2 +
-            (desired_pose.position.z - self.current_pose.position.z) ** 2
-        )
+        if (self.current_pose is None):
+            print("wait for pose")
+            time.sleep(0.01)
 
-        current_orientation = [self.current_pose.orientation.x,
-                               self.current_pose.orientation.y,
-                               self.current_pose.orientation.z,
-                               self.current_pose.orientation.w]
+        if isinstance(self.current_pose, TransformStamped):
+            translation = self.current_pose.transform.translation
+            rotation = self.current_pose.transform.rotation
+            current_position = [translation.x, translation.y, translation.z]
+            current_orientation = [rotation.x, rotation.y, rotation.z, rotation.w]
+        elif isinstance(self.current_pose, Pose):
+            current_position = [self.current_pose.position.x,
+                        self.current_pose.position.y,
+                        self.current_pose.position.z]
+            current_orientation = [self.current_pose.orientation.x,
+                        self.current_pose.orientation.y,
+                        self.current_pose.orientation.z,
+                        self.current_pose.orientation.w]
+        elif self.current_pose is None:
+            print("isnone")
+        else:
+            print("don't know")
+        distance = math.sqrt(
+            (desired_pose.position.x - current_position[0]) ** 2 +
+            (desired_pose.position.y - current_position[1]) ** 2 +
+            (desired_pose.position.z - current_position[2]) ** 2   )
+            
+
         desired_orientation = [desired_pose.orientation.x,
                                desired_pose.orientation.y,
                                desired_pose.orientation.z,

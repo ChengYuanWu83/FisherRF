@@ -27,6 +27,39 @@ except ImportError:
     TENSORBOARD_FOUND = False
 from utils.cluster_manager import ClusterStateManager
 
+#[cyw]:setup_csv
+def setup_csv(path):
+    training_time_csv = f"{path}/training_time.csv"
+    training_file_exists = os.path.isfile(training_time_csv)
+    if not training_file_exists:
+        with open(training_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['iterations', 'loss', 'times'])
+    
+    algo_time_csv = f"{path}/algo_time.csv"
+    algo_file_exists = os.path.isfile(algo_time_csv)
+    if not algo_file_exists:
+        with open(algo_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['select_idxs', 'times'])
+
+    flying_time_csv = f"{path}/flying_time.csv"
+    flying_file_exists = os.path.isfile(flying_time_csv)
+    if not flying_file_exists:
+        with open(flying_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    captured_time_csv = f"{path}/captured_time.csv"
+    captured_file_exists = os.path.isfile(captured_time_csv)
+    if not captured_file_exists:
+        with open(captured_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    return training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv
+    
+
 csm = ClusterStateManager()
 
 @torch.no_grad()

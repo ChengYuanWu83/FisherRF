@@ -8,13 +8,15 @@ sys.path.insert(0, root_dir)
 
 from argparse import ArgumentParser
 from planner import get_planner
-from planner.utils import uniform_sampling, xyz_to_view, random_view
+from planner.utils import uniform_sampling, xyz_to_view, random_view, rotation_2_quaternion
 import numpy as np
 import yaml
 import time
 from planner import utils
 import json
 import imageio.v2 as imageio
+import csv
+from scipy.spatial.transform import Rotation as R
 
 def create_empty_test_set(source_path, camera_info):
     test_path = os.path.join(source_path, "test")
@@ -42,16 +44,30 @@ def save_image_into_train_set(source_path, captured_pose, image, camera_info):
             record_dict = camera_dict
 
     i = len(record_dict["frames"])
-    transformation = np.array(
-    [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
-    )  # transform gazebo coordinate to opengl format
+    # transformation = np.array(
+    # [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
+    # )  # transform gazebo coordinate to opengl format
+    # transform = utils.quaternion_to_rotation_matrix(captured_pose)
+    # # print(transform)
+    # opengltransform = transform @ transformation
+    
+    # [cyw]:rotate to opengl transform
     transform = utils.quaternion_to_rotation_matrix(captured_pose)
-    print(transform)
-    opengltransform = transform @ transformation
+    opengltransform = np.eye(4)
+    euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
+    print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+    new_euler = np.empty(3)
+    new_euler[0] = euler[1] + (np.pi/2)
+    new_euler[1] = euler[0]
+    new_euler[2] = euler[2] - (np.pi/2)
+    opengl_rotation =  R.from_euler('xyz', [new_euler[0] , new_euler[1], new_euler[2]]).as_matrix()
+    opengltransform[:3, -1] = transform[:3, -1]
+    opengltransform[:3, :3] = opengl_rotation
+
     train_image_file = (f"./train/r_{i:04d}")
     data_frame = {
         "file_path": train_image_file,
-        "transform_matrix": opengltransform.tolist(),
+        "transform_matrix": opengltransform.tolist(), #[cyw]: see waht happend if don't use it
     }
     record_dict["frames"].append(data_frame)
     with open(transform_json_file, "w") as f:
@@ -60,6 +76,20 @@ def save_image_into_train_set(source_path, captured_pose, image, camera_info):
     train_path = os.path.join(source_path, "train")
     os.makedirs(train_path, exist_ok=True)
     imageio.imwrite(f"{train_path}/r_{i:04d}.png", image)
+    
+
+    # openglcsv
+    # opengl_transform_file = (f"{source_path}/opengltransform.csv")
+    # file_exists = os.path.isfile(opengl_transform_file)
+    # opengl_quaternion = rotation_2_quaternion(opengltransform[:3, :3])
+    # opengl_translation = opengltransform[:3, -1]
+
+    # with open(opengl_transform_file, mode='a', newline='') as f:
+    #     writer = csv.writer(f)
+    #     if not file_exists:
+    #         writer.writerow(['index','x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
+    #     opengl_pose = [i ,*opengl_translation, *opengl_quaternion]
+    #     writer.writerow(opengl_pose)
 
 
 if __name__ == "__main__":
@@ -72,9 +102,14 @@ if __name__ == "__main__":
     parser.add_argument("--radius", type=float, default=2.0, help="radius of uniform_sampling")
     parser.add_argument("--phi_min", type=float, default=0.15, help="the minimum of phi in uniform_sampling")
     parser.add_argument("--experiment_path", type=str, required=True, help="must be defined in evaluation mode")
-    parser.add_argument("--views_num", type=int, default="24", help="the number of candidate views")
+    parser.add_argument("--views_num", type=int, default="5", help="the number of candidate views")
     parser.add_argument("--test_set", action="store_true", help="create empty test set")
     args = parser.parse_args()
+
+    
+    # if 360 % args.views_num !=0:
+    #     print(f"view_num: {args.views_num} is invalid, the number must be divisible by 360")
+    #     exit()
 
     print(
         f"---------- random planner ----------\n"
@@ -97,21 +132,27 @@ if __name__ == "__main__":
     if args.test_set == True:
         create_empty_test_set(args.experiment_path, camera_info)
 
-    starting_view_setting = np.array([1.0, 0.0, 0.5])
-    starting_view = xyz_to_view(xyz=starting_view_setting, radius=args.radius)
-    view_list = np.empty((args.views_num, 2))
-    view_list[0] = starting_view
-    # generate the circular trajectory 
-    for i in range(args.views_num - 1):
-        view_list[i+1][0] = view_list[i][0]
-        view_list[i+1][1] = view_list[i][1] + (360 / args.views_num) * (np.pi / 180)
 
-    sorted_indices = np.argsort(view_list[:, 1])
-    view_list = view_list[sorted_indices]
+    phi_list = np.array([15, 30, 45, 60, 75]) * (np.pi / 180)    #[cyw]:phi_list
+    theta_list = np.empty(args.views_num)
+    for i in range(args.views_num):
+        theta_list[i] = (360/args.views_num) * i * (np.pi / 180)
+
+    view_list = np.empty((args.views_num * len(phi_list), 2))
+
+    index = 0 
+    for phi in phi_list:
+        for theta in theta_list:
+            view_list[index][0] = phi
+            view_list[index][1] = theta
+            index += 1
+
+    # # sorted_indices = np.argsort(view_list[:, 1])
+    # view_list = view_list[sorted_indices]
     print(view_list)
     # move to the all candidate views
     for view in view_list:
         nbv_planner.move_sensor(view)
-        time.sleep(2.5)
+        # time.sleep(2.5)
         rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
         save_image_into_train_set(args.experiment_path, captured_pose, rgb, camera_info)

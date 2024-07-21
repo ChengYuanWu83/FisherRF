@@ -7,7 +7,7 @@ import json
 import os
 import imageio
 from scene.cameras import FakeCam
-
+from geometry_msgs.msg import PoseStamped, Pose, TransformStamped
 
 def get_roi_mask(rgb):
     """binary mask for ROIs using color thresholding"""
@@ -49,24 +49,6 @@ def xyz_to_view_cylinder(xyz, radius): #[cyw]: cylinder look inside
 
     return [phi, theta]
 
-def view_to_pose(view, radius):
-    phi, theta = view
-
-    # phi should be within [min_phi, 0.5*np.pi)
-    if phi >= 0.5 * np.pi:
-        phi = np.pi - phi
-
-    pose = np.eye(4)
-    x = radius * np.cos(theta) * np.cos(phi)
-    y = radius * np.sin(theta) * np.cos(phi)
-    z = radius * np.sin(phi)
-
-    translation = np.array([x, y, z])
-    rotation = R.from_euler("ZYZ", [theta, -phi, np.pi]).as_matrix()
-
-    pose[:3, -1] = translation
-    pose[:3, :3] = rotation
-    return pose
 
 
 
@@ -90,8 +72,67 @@ def view_to_pose(view, radius):
     z = radius * np.sin(phi)
 
     translation = np.array([x, y, z])
-    rotation = R.from_euler("ZYZ", [theta, -phi, np.pi]).as_matrix()
+    rotation = R.from_euler("ZYX", [theta, np.pi+phi, np.pi]).as_matrix()
 
+    pose[:3, -1] = translation
+    pose[:3, :3] = rotation
+    return pose
+
+def view_to_pose_with_target_point(view, radius, target=[0, 0, 0]):
+    phi, theta = view
+
+    # phi should be within [min_phi, 0.5*np.pi)
+    if phi >= 0.5 * np.pi:
+        phi = np.pi - phi
+
+    pose = np.eye(4)
+    x = radius * np.cos(theta) * np.cos(phi)
+    y = radius * np.sin(theta) * np.cos(phi)
+    z = radius * np.sin(phi)
+
+    translation = np.array([x, y, z])
+
+    pose = np.eye(4)
+
+    source = translation
+    target = np.array(target)
+
+    direction = target - source
+    
+    direction = direction / np.linalg.norm(direction)
+    # print(f"direction: {direction}")
+    yaw = np.arctan2(direction[1], direction[0])
+    pitch = np.arcsin(direction[2])
+    roll = 0
+    # print(f"roll: {roll}, pitch: {pitch}, yaw:{yaw}")
+    # rotation = R.from_euler("ZYX", [theta, np.pi+phi, np.pi]).as_matrix()
+    # rotation = R.from_euler('ZYX', [yaw , pitch, 0]).as_matrix()
+    rotation = R.from_euler('xyz', [roll , pitch, yaw]).as_matrix()
+    pose[:3, -1] = translation
+    pose[:3, :3] = rotation
+    return pose
+
+def points_to_pose(source, target=[0, 0, 0]):
+
+    pose = np.eye(4)
+
+
+    translation = np.array(source)
+
+    source = translation
+    target = np.array(target)
+
+    direction = target - source
+    
+    direction = direction / np.linalg.norm(direction)
+    # print(f"direction: {direction}")
+    yaw = np.arctan2(direction[1], direction[0])
+    pitch = np.arcsin(direction[2])
+    roll = 0
+    print(f"roll: {roll}, pitch: {pitch}, yaw:{yaw}")
+    # rotation = R.from_euler("ZYX", [theta, np.pi+phi, np.pi]).as_matrix()
+    # rotation = R.from_euler('ZYX', [yaw , pitch, 0]).as_matrix()
+    rotation = R.from_euler('xyz', [roll , pitch, yaw]).as_matrix()
     pose[:3, -1] = translation
     pose[:3, :3] = rotation
     return pose
@@ -109,8 +150,10 @@ def view_to_position_and_rotation(view, radius): #[cyw]
     z = radius * np.sin(phi)
 
     translation = np.array([x, y, z])
-    rotation = [theta, -phi, np.pi]
-
+    # rotation_init = R.from_euler("XYZ", [-1.57, -3.14, 0]).as_matrix()
+    rotation_angle = R.from_euler("ZYZ", [theta, -phi, np.pi]).as_matrix()
+    # rotation_angle =  rotation_angle * rotation_init
+    rotation = rotation_2_quaternion(rotation_angle)
     # pose[:3, -1] = translation
     # pose[:3, :3] = rotation
     return translation, rotation
@@ -166,8 +209,8 @@ def random_view(current_xyz, radius, phi_min, min_view_change, max_view_change):
 
     if view[0] < phi_min:
         view[0] = phi_min
-    if view[0] > 0.5: #[cyw]
-        view[0] = 0.5
+    # if view[0] > 0.5: #[cyw]
+    #     view[0] = 0.5
 
     return view
 
@@ -191,8 +234,8 @@ def uniform_sampling(radius, phi_min):
 
     if view[0] < phi_min:
         view[0] = phi_min
-    if view[0] > 0.5: #[cyw]
-        view[0] = 0.5
+    # if view[0] > 0.5: #[cyw]
+    #     view[0] = 0.5
     return view
 
 
@@ -336,21 +379,37 @@ def quaternion_to_rotation_matrix(ros_pose):
     Returns:
     np.array: A 3x3 rotation matrix.
     """
-    x = ros_pose.position.x
-    y = ros_pose.position.y
-    z = ros_pose.position.z
-    qx = ros_pose.orientation.x
-    qy = ros_pose.orientation.y
-    qz = ros_pose.orientation.z
-    qw = ros_pose.orientation.w
+    if isinstance(ros_pose, TransformStamped):
+        translation = ros_pose.transform.translation
+        rotation = ros_pose.transform.rotation
+        current_position = [translation.x, translation.y, translation.z]
+        current_orientation = [rotation.x, rotation.y, rotation.z, rotation.w]
+        print("Current Position (from TransformStamped):", current_position)
+        print("Current Orientation (from TransformStamped):", current_orientation)
+    elif isinstance(ros_pose, Pose):
+        current_position = [ros_pose.position.x,
+                    ros_pose.position.y,
+                    ros_pose.position.z]
+        current_orientation = [ros_pose.orientation.x,
+                    ros_pose.orientation.y,
+                    ros_pose.orientation.z,
+                    ros_pose.orientation.w]
+        
+    x = current_position[0]
+    y = current_position[1]
+    z = current_position[2]
+    qx = current_orientation[0]
+    qy = current_orientation[1]
+    qz = current_orientation[2]
+    qw = current_orientation[3]
 
     # Compute rotation matrix
-    rotation = np.array([
-        [1 - 2*qy**2 - 2*qz**2, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
-        [2*qx*qy + 2*qz*qw, 1 - 2*qx**2 - 2*qz**2, 2*qy*qz - 2*qx*qw],
-        [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx**2 - 2*qy**2]
-    ])
-
+    # rotation = np.array([
+    #     [1 - 2*qy**2 - 2*qz**2, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
+    #     [2*qx*qy + 2*qz*qw, 1 - 2*qx**2 - 2*qz**2, 2*qy*qz - 2*qx*qw],
+    #     [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx**2 - 2*qy**2]
+    # ])
+    rotation = R.from_quat([qx,qy,qz,qw]).as_matrix()
     translation = [x,y,z]
 
     transform = np.eye(4)
@@ -385,7 +444,7 @@ def get_camera_json(camera_info):
     return record_dict
 
 def view_to_cam(view, radius,camera_info):
-    transform = view_to_pose(view, radius)
+    transform = view_to_pose_with_target_point(view, radius)
     camera = GetCamerasFromTransforms(transform, camera_info)
     return camera
 

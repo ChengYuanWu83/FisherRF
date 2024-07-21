@@ -148,9 +148,9 @@ class FisherPlanner(Planner):
         
         current_pose = []
         cp = self.simulator_bridge.current_pose
-        current_pose.append(cp.position.x)
-        current_pose.append(cp.position.y)
-        current_pose.append(cp.position.z)
+        current_pose.append(cp.transform.translation.x)
+        current_pose.append(cp.transform.translation.y)
+        current_pose.append(cp.transform.translation.z)
         current_pose = np.array(current_pose)
         if self.planning_type == "local":
             for i in range(self.num_candidates):

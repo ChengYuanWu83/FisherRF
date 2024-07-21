@@ -8,8 +8,6 @@ sys.path.insert(0, root_dir)
 
 from train_with_plan.dataset_manager import save_image_with_viewport
 from argparse import ArgumentParser, Namespace
-# from arguments import ModelParams, PipelineParams, OptimizationParams
-# from train_with_plan.nbv_planner import plan
 from planner import get_planner
 from planner.utils import uniform_sampling
 import numpy as np
@@ -18,6 +16,7 @@ import time
 from planner import utils
 import json
 import imageio.v2 as imageio
+from scipy.spatial.transform import Rotation as R
     
 def save_image_into_set(source_path, captured_pose, image, camera_info, set_type):
     print("------ record simulator data ------\n")
@@ -34,12 +33,26 @@ def save_image_into_set(source_path, captured_pose, image, camera_info, set_type
             record_dict = camera_dict
 
     i = len(record_dict["frames"])
-    transformation = np.array(
-    [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
-    )  # transform gazebo coordinate to opengl format
+    # transformation = np.array(
+    # [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
+    # )  # transform gazebo coordinate to opengl format
+    # transform = utils.quaternion_to_rotation_matrix(captured_pose)
+    # # print(transform)
+    # opengltransform = transform @ transformation
+    
+    # [cyw]:rotate to opengl transform
     transform = utils.quaternion_to_rotation_matrix(captured_pose)
-    print(transform)
-    opengltransform = transform @ transformation
+    opengltransform = np.eye(4)
+    euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
+    print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+    new_euler = np.empty(3)
+    new_euler[0] = euler[1] + (np.pi/2)
+    new_euler[1] = euler[0]
+    new_euler[2] = euler[2] - (np.pi/2)
+    opengl_rotation =  R.from_euler('xyz', [new_euler[0] , new_euler[1], new_euler[2]]).as_matrix()
+    opengltransform[:3, -1] = transform[:3, -1]
+    opengltransform[:3, :3] = opengl_rotation
+
     set_image_file = (f"./{set_type}/r_{i:04d}")
     data_frame = {
         "file_path": set_image_file,
@@ -64,7 +77,7 @@ if __name__ == "__main__":
     parser.add_argument("--radius", type=float, default=2.0, help="radius of uniform_sampling")
     parser.add_argument("--phi_min", type=float, default=0.15, help="the minimum of phi in uniform_sampling")
     parser.add_argument("--experiment_path", type=str, default="not defined", help="must be defined in evaluation mode")
-    parser.add_argument("--candidate_views_num", type=int, default="3", help="the number of candidate views")
+    parser.add_argument("--candidate_views_num", type=int, default="10", help="the number of candidate views")
     parser.add_argument("--set_type", type=str, default="test", help="train set or test set")
     args = parser.parse_args()
 
@@ -95,7 +108,7 @@ if __name__ == "__main__":
     # move to the all candidate views
     for view in view_list:
         nbv_planner.move_sensor(view)
-        time.sleep(2.5)
+        # time.sleep(2.5)
         rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
         camera_info = nbv_planner.simulator_bridge.camera_info
         save_image_into_set(args.experiment_path, captured_pose, rgb, camera_info, args.set_type)
