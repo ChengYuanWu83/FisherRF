@@ -23,10 +23,12 @@ python ./train_with_plan/nbv_planner.py --experiment_path /home/nmsl/nbv_simulat
 python ./train_with_plan/train_extend.py -s /home/nmsl/nbv_simulator_data/test -m ./exp_results/test1 --iterations 10000 --white_background --eval
 
 #capture
-python ./train_with_plan/circular_capture.py --experiment_path /home/nmsl/nbv_simulator_data/circular --radius 3
+python ./train_with_plan/circular_capture.py --experiment_path /home/nmsl/nbv_simulator_data/circular --radius 3 --record
 
 python ./train_with_plan/random_capture.py --experiment_path /home/nmsl/nbv_simulator_data/test --set_type test --radius 3 --candidate_views_num 50
 
+
+python ./
 
 #eval
 python render.py -s /home/nmsl/nbv_simulator_data/test -m ./exp_results/test/final --eval

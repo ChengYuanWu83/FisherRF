@@ -238,6 +238,25 @@ def uniform_sampling(radius, phi_min):
     #     view[0] = 0.5
     return view
 
+def sphere_sampling(longtitude_range, latitude_range):
+    view_list = np.empty((latitude_range * longtitude_range, 2))
+
+    latitude_interval = 15
+    phi_list = np.arange(1, latitude_range + 1) * latitude_interval * (np.pi / 180)    #[cyw]:phi_list
+    theta_list = np.empty(longtitude_range)
+    for i in range(longtitude_range):
+        theta_list[i] = (360/longtitude_range) * i * (np.pi / 180)
+
+    index = 0 
+    for phi in phi_list:
+        for theta in theta_list:
+            view_list[index][0] = phi
+            view_list[index][1] = theta
+            index += 1
+
+    # # sorted_indices = np.argsort(view_list[:, 1])
+    # view_list = view_list[sorted_indices]
+    return view_list
 
 def focal_len_to_fov(focal, resolution):
     """
@@ -384,8 +403,8 @@ def quaternion_to_rotation_matrix(ros_pose):
         rotation = ros_pose.transform.rotation
         current_position = [translation.x, translation.y, translation.z]
         current_orientation = [rotation.x, rotation.y, rotation.z, rotation.w]
-        print("Current Position (from TransformStamped):", current_position)
-        print("Current Orientation (from TransformStamped):", current_orientation)
+        # print("Current Position (from TransformStamped):", current_position)
+        # print("Current Orientation (from TransformStamped):", current_orientation)
     elif isinstance(ros_pose, Pose):
         current_position = [ros_pose.position.x,
                     ros_pose.position.y,
@@ -445,7 +464,20 @@ def get_camera_json(camera_info):
 
 def view_to_cam(view, radius,camera_info):
     transform = view_to_pose_with_target_point(view, radius)
-    camera = GetCamerasFromTransforms(transform, camera_info)
+
+    # [cyw]:rotate to opengl transform
+    opengltransform = np.eye(4)
+    euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
+    # print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+    new_euler = np.empty(3)
+    new_euler[0] = euler[1] + (np.pi/2)
+    new_euler[1] = euler[0]
+    new_euler[2] = euler[2] - (np.pi/2)
+    opengl_rotation =  R.from_euler('xyz', [new_euler[0] , new_euler[1], new_euler[2]]).as_matrix()
+    opengltransform[:3, -1] = transform[:3, -1]
+    opengltransform[:3, :3] = opengl_rotation
+
+    camera = GetCamerasFromTransforms(opengltransform, camera_info)
     return camera
 
 def GetCamerasFromTransforms(transforms, camera_info):

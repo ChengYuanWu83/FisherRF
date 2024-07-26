@@ -10,6 +10,9 @@ import csv
 import math
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import time
+import copy
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 
 class SimulatorBridge:
     def __init__(self, cfg):
@@ -101,40 +104,95 @@ class SimulatorBridge:
         camera_pose_msg.pose.orientation.w = quaternion[3]
 
         self.pose_pub.publish(camera_pose_msg)
+    #[cyw]:unpack the ros pose datastructure
+    def get_current_ros_pose_in_list(self):
+        if ( self.current_pose is None):
+            print("wait for pose")
+            time.sleep(0.01)
+        if isinstance(self.current_pose, TransformStamped):
+            translation = self.current_pose.transform.translation
+            rotation = self.current_pose.transform.rotation
+            current_position = [translation.x, translation.y, translation.z]
+            current_orientation = [rotation.x, rotation.y, rotation.z, rotation.w]
+        elif isinstance(self.current_pose, Pose):
+            current_position = [self.current_pose.position.x,
+                        self.current_pose.position.y,
+                        self.current_pose.position.z]
+            current_orientation = [self.current_pose.orientation.x,
+                        self.current_pose.orientation.y,
+                        self.current_pose.orientation.z,
+                        self.current_pose.orientation.w]
+        elif self.current_pose is None:
+            print("isnone")
+        else:
+            print("don't know")
+        return current_position, current_orientation
     #[cyw]: move uav func
-    def move_uav(self, pose, record_path): 
-        quaternion = utils.rotation_2_quaternion(pose[:3, :3])
-        translation = pose[:3, -1]
+    def slow_move_uav_in_rotations(self, desired_pose):
+        new_desired_pose = copy.deepcopy(desired_pose)
+        current_position, current_orientation = self.get_current_ros_pose_in_list()
+
+        # interpolate on position
+        current_position = np.array(current_position)
+        desired_position = np.array(new_desired_pose[:3])
+        distance = np.linalg.norm(desired_position - current_position)
+
+        # print(f"current_position: {current_position}")
+
+        if distance > 1:
+            unit = (desired_position - current_position) / distance / 1.5
+            new_desired_pose[:3] = unit + current_position
+
+            #interpolate on orientation
+            r1 = R.from_quat(current_orientation)
+            r2 = R.from_quat(new_desired_pose[3:])
+            key_times = [0, 1]
+            key_rots = R.from_quat([r1.as_quat(), r2.as_quat()])
+            slerped_rots = Slerp(key_times, key_rots)
+
+            times = np.linspace(0, 1, int(distance) + 1)
+            interpolated_quaternions = slerped_rots(times)
+            new_desired_pose[3:] = interpolated_quaternions[1].as_quat()
+            
+        self.move_uav(new_desired_pose)
+        # return uav_pose_msg
+
+    def move_uav(self, pose): 
+        # quaternion = utils.rotation_2_quaternion(pose[:3, :3])
+        # translation = pose[:3, -1]
+
 
         uav_pose_msg = PoseStamped()
         # uav_pose_msg.model_name = self.camera_type
-        uav_pose_msg.pose.position.x = translation[0]
-        uav_pose_msg.pose.position.y = translation[1]
-        uav_pose_msg.pose.position.z = translation[2]
-        uav_pose_msg.pose.orientation.x = quaternion[0]
-        uav_pose_msg.pose.orientation.y = quaternion[1]
-        uav_pose_msg.pose.orientation.z = quaternion[2]
-        uav_pose_msg.pose.orientation.w = quaternion[3]
+        uav_pose_msg.pose.position.x = pose[0]
+        uav_pose_msg.pose.position.y = pose[1]
+        uav_pose_msg.pose.position.z = pose[2]
+        uav_pose_msg.pose.orientation.x = pose[3]
+        uav_pose_msg.pose.orientation.y = pose[4]
+        uav_pose_msg.pose.orientation.z = pose[5]
+        uav_pose_msg.pose.orientation.w = pose[6]
         uav_pose_msg.header.stamp = rospy.Time.now()
 
         # self.command_pose = uav_pose_msg
 
         # print(uav_pose_msg)
         #[cyw]: Save a pose to a CSV file.
-        os.makedirs(record_path, exist_ok = True)
-        csv_file = (f"{record_path}/target_uav_pose.csv")
-        file_exists = os.path.isfile(csv_file)
-
-        with open(csv_file, mode='a', newline='') as f:
-            writer = csv.writer(f)
-
-            if not file_exists:
-                writer.writerow(['timestamp','x', 'y', 'z', 'qx', 'qy', 'qz','qw'])
-            pose = [(uav_pose_msg.header.stamp.to_sec() + uav_pose_msg.header.stamp.to_nsec())/10**9, *translation, *quaternion]
-
-            writer.writerow(pose)
+        
         self.pose_pub.publish(uav_pose_msg)
-        return uav_pose_msg
+        # return uav_pose_msg
+    
+    def slow_move_uav(self, desired_pose):
+        new_desired_pose = copy.deepcopy(desired_pose)
+        current_position, current_orientation = self.get_current_ros_pose_in_list()
+
+        current_position = np.array(current_position)
+        desired_position = np.array(new_desired_pose[:3])
+        distance = np.linalg.norm(desired_position - current_position)
+        if distance > 1:
+            unit = (desired_position - current_position) / distance / 2
+            new_desired_pose[:3] = unit + current_position
+        # print(f"current_position: {current_position}")
+        self.move_uav(new_desired_pose)
 
     def update_rgb(self, data):
         self.current_rgb = data
@@ -171,38 +229,16 @@ class SimulatorBridge:
     #[cyw]:
     def check_if_uav_arrive(self, desired_pose):
         # Calculate the distance to the desired pose
-        if (self.current_pose is None):
-            print("wait for pose")
-            time.sleep(0.01)
+        current_position, current_orientation = self.get_current_ros_pose_in_list()
 
-        if isinstance(self.current_pose, TransformStamped):
-            translation = self.current_pose.transform.translation
-            rotation = self.current_pose.transform.rotation
-            current_position = [translation.x, translation.y, translation.z]
-            current_orientation = [rotation.x, rotation.y, rotation.z, rotation.w]
-        elif isinstance(self.current_pose, Pose):
-            current_position = [self.current_pose.position.x,
-                        self.current_pose.position.y,
-                        self.current_pose.position.z]
-            current_orientation = [self.current_pose.orientation.x,
-                        self.current_pose.orientation.y,
-                        self.current_pose.orientation.z,
-                        self.current_pose.orientation.w]
-        elif self.current_pose is None:
-            print("isnone")
-        else:
-            print("don't know")
+        current_pose = [*current_position, *current_orientation]    
         distance = math.sqrt(
-            (desired_pose.position.x - current_position[0]) ** 2 +
-            (desired_pose.position.y - current_position[1]) ** 2 +
-            (desired_pose.position.z - current_position[2]) ** 2   )
+            (desired_pose[0] - current_pose[0]) ** 2 +
+            (desired_pose[1] - current_pose[1]) ** 2 +
+            (desired_pose[2] - current_pose[2]) ** 2   )
             
-
-        desired_orientation = [desired_pose.orientation.x,
-                               desired_pose.orientation.y,
-                               desired_pose.orientation.z,
-                               desired_pose.orientation.w]
-        
+        current_orientation = current_pose[-4:]
+        desired_orientation = desired_pose[-4:]
         current_euler = euler_from_quaternion(current_orientation)
         desired_euler = euler_from_quaternion(desired_orientation)
 
@@ -211,7 +247,7 @@ class SimulatorBridge:
             (current_euler[1] - desired_euler[1]) ** 2 +
             (current_euler[2] - desired_euler[2]) ** 2
         )
-        # print(f"desired_pose UAV Pose: x={desired_pose.position.x}, y={desired_pose.position.y}, z={desired_pose.position.z}")
+        # print(f"desired_pose UAV Pose: {desired_pose}")
         # print(f"current_pose UAV Pose: x={self.current_pose.position.x}, y={self.current_pose.position.y}, z={self.current_pose.position.z}")
         # print(f"Distance to desired pose: {distance}, and orientation_diff: {orientation_diff}")
 

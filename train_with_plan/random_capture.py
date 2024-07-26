@@ -9,7 +9,7 @@ sys.path.insert(0, root_dir)
 from train_with_plan.dataset_manager import save_image_with_viewport
 from argparse import ArgumentParser, Namespace
 from planner import get_planner
-from planner.utils import uniform_sampling
+from planner.utils import uniform_sampling, sphere_sampling
 import numpy as np
 import yaml
 import time
@@ -17,7 +17,27 @@ from planner import utils
 import json
 import imageio.v2 as imageio
 from scipy.spatial.transform import Rotation as R
+import csv
     
+def setup_csv(path):
+
+    flying_time_csv = f"{path}/flying_time.csv"
+    flying_file_exists = os.path.isfile(flying_time_csv)
+    if not flying_file_exists:
+        with open(flying_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    captured_time_csv = f"{path}/captured_time.csv"
+    captured_file_exists = os.path.isfile(captured_time_csv)
+    if not captured_file_exists:
+        with open(captured_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    return flying_time_csv, captured_time_csv
+
+
 def save_image_into_set(source_path, captured_pose, image, camera_info, set_type):
     print("------ record simulator data ------\n")
     # [cyw]:save transform_{set_type}.json
@@ -44,7 +64,7 @@ def save_image_into_set(source_path, captured_pose, image, camera_info, set_type
     transform = utils.quaternion_to_rotation_matrix(captured_pose)
     opengltransform = np.eye(4)
     euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
-    print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+    # print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
     new_euler = np.empty(3)
     new_euler[0] = euler[1] + (np.pi/2)
     new_euler[1] = euler[0]
@@ -75,10 +95,14 @@ if __name__ == "__main__":
     # # parser.add_argument("--starting", action="store_true", help="planner_type")
     # parser.add_argument("--planner_type", "-P", type=str, default="random", help="planner_type")
     parser.add_argument("--radius", type=float, default=2.0, help="radius of uniform_sampling")
-    parser.add_argument("--phi_min", type=float, default=0.15, help="the minimum of phi in uniform_sampling")
+    parser.add_argument("--phi_min", type=float, default=0.26, help="the minimum of phi in uniform_sampling")
     parser.add_argument("--experiment_path", type=str, default="not defined", help="must be defined in evaluation mode")
-    parser.add_argument("--candidate_views_num", type=int, default="10", help="the number of candidate views")
-    parser.add_argument("--set_type", type=str, default="test", help="train set or test set")
+    parser.add_argument("--candidate_views_num", type=int, default="50", help="the number of candidate views")
+    parser.add_argument("--set_type", type=str, default="train", help="train set or test set")
+    parser.add_argument("--record", action="store_true", help="record time")
+    parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
+    parser.add_argument("--sort_view", action="store_true", help="sort_view")
+    parser.add_argument("--sampling_method", type=str, default="sphere", help="options: random, sphere")
     args = parser.parse_args()
 
     print(
@@ -94,21 +118,55 @@ if __name__ == "__main__":
     # planner_cfg.update(__dict__)
     planner_cfg["planner_type"] = "random"
     planner_cfg["experiment_path"] = args.experiment_path
+    planner_cfg["action_space"]["radius"] = args.radius
     # planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
     print(planner_cfg)
     nbv_planner = get_planner(planner_cfg)
+    camera_info = nbv_planner.simulator_bridge.camera_info
 
-    view_list = np.empty((args.candidate_views_num, 2))
-    for i in range(args.candidate_views_num):
-        view_list[i] = uniform_sampling(args.radius, args.phi_min)
+    view_list = None
+    if args.sampling_method == "random":
+        view_list = np.empty((args.candidate_views_num, 2))
+        for i in range(args.candidate_views_num):
+            view_list[i] = uniform_sampling(args.radius, args.phi_min)
+    elif args.sampling_method == "sphere":
+        view_list = sphere_sampling(longtitude_range = 16 ,latitude_range = 4)
+        np.random.shuffle(view_list)
+    else:
+        print(f"unknown sampling method {args.sampling_method}")
 
-    sorted_indices = np.argsort(view_list[:, 1])
-    view_list = view_list[sorted_indices]
+    # sort the view to enhance the flying time
+    if args.sort_view:
+        sorted_indices = np.argsort(view_list[:, 1])
+        view_list = view_list[sorted_indices]
+
     print(view_list)
+
+    pose_idxs = 0
+    time_budget = args.time_budget
     # move to the all candidate views
     for view in view_list:
-        nbv_planner.move_sensor(view)
-        # time.sleep(2.5)
-        rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
-        camera_info = nbv_planner.simulator_bridge.camera_info
-        save_image_into_set(args.experiment_path, captured_pose, rgb, camera_info, args.set_type)
+        if time_budget > 0:
+            flying_start_time = time.time()
+            nbv_planner.move_sensor(view)
+            flying_end_time = time.time()
+            # time.sleep(2.5)
+            captured_start_time = time.time()
+            rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
+            save_image_into_set(args.experiment_path, captured_pose, rgb, camera_info, args.set_type)
+            captured_end_time = time.time()
+
+            if args.record == True and pose_idxs == 0:
+                    flying_time_csv, captured_time_csv = setup_csv(args.experiment_path)
+
+            if args.record == True: 
+                with open(flying_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+
+                with open(captured_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
+                pose_idxs += 1
+            
+            time_budget = time_budget - (captured_end_time - flying_start_time)

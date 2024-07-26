@@ -7,7 +7,7 @@ import random
 from gaussian_renderer import render, network_gui, modified_render
 from scene import Scene
 from planner.planner import Planner
-from planner.utils import view_to_pose_batch, random_view, uniform_sampling, view_to_cam
+from planner.utils import view_to_pose_batch, random_view, uniform_sampling, view_to_cam, sphere_sampling
 
 class FisherPlanner(Planner):
     def __init__(self, cfg):
@@ -15,6 +15,7 @@ class FisherPlanner(Planner):
         self.num_candidates = cfg["num_candidates"]
         self.view_change = cfg["view_change"]
         self.planning_type = cfg["planning_type"]
+        self.candidate_view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4) 
 
         #self.seed = args.seed
         self.reg_lambda = 1e-6
@@ -144,47 +145,26 @@ class FisherPlanner(Planner):
         return selected_idxs
     
     def plan_next_view(self, gaussians, scene: Scene, num_views, pipe, background, exit_func):
-        view_list = np.empty((self.num_candidates, 2))
-        
-        current_pose = []
-        cp = self.simulator_bridge.current_pose
-        current_pose.append(cp.transform.translation.x)
-        current_pose.append(cp.transform.translation.y)
-        current_pose.append(cp.transform.translation.z)
-        current_pose = np.array(current_pose)
-        if self.planning_type == "local":
-            for i in range(self.num_candidates):
-                view_list[i] = random_view(
-                    current_pose, #[cyw]: change planner pose to ros pose, oringinal: self.current_pose[:3, 3]
-                    self.radius,
-                    self.phi_min,
-                    min_view_change=0.2,
-                    max_view_change=self.view_change,
-                )
-            #print(f"view_list: {view_list}") #[cyw]: phi, theta
-        elif self.planning_type == "global":
-            for i in range(self.num_candidates):
-                view_list[i] = uniform_sampling(self.radius, self.phi_min)
+        view_list = self.candidate_view_list
 
         candidate_cams = []
         # [cyw]: transform random_view(phi, theta) to cam in order to get the novel view
         for view in view_list:
             candidate_cams.append(view_to_cam(view, self.radius, self.camera_info))
 
-        # for cam in candidate_cams:
-
-        #     print(cam.world_view_transform,
-        #           cam.projection_matrix,
-        #           cam.full_proj_transform,
-        #           cam.camera_center
-        #           )
-
-
         #nbv_index = np.random.choice(len(view_list))
         nbv_index = self.nbvs(gaussians, scene, num_views, pipe, background, candidate_cams, exit_func)
 
         nbv = view_list[nbv_index]
+        print(f"fisher planner select view: {nbv}")
+        view_list = np.array([item for item in view_list if not np.array_equal(item, nbv)])
+        self.candidate_view_list = view_list
         return nbv
     
+    def del_init_view(self,init_view):
+        view_list = self.candidate_view_list
+        view_list = np.array([item for item in view_list if not np.array_equal(item, init_view)])
+        self.candidate_view_list = view_list
+
     def view_to_camera_info(view):
         return 1

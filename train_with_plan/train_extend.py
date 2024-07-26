@@ -31,10 +31,20 @@ except ImportError:
     TENSORBOARD_FOUND = False
 # [cyw]: record the csv in order to decide iterations time
 import csv
-csv_file = 'training_loss.csv'
-with open(csv_file, mode='w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(['iteration', 'loss', 'iteration_times'])
+import time
+# csv_file = 'training_loss.csv'
+# with open(csv_file, mode='w', newline='') as file:
+#     writer = csv.writer(file)
+#     writer.writerow(['iteration', 'loss', 'iteration_times'])
+
+def setup_csv(path):
+    training_time_csv = f"{path}/training_time.csv"
+    training_file_exists = os.path.isfile(training_time_csv)
+    if not training_file_exists:
+        with open(training_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['iterations', 'loss', 'times'])
+    return training_time_csv
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -56,6 +66,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    training_time_csv = setup_csv(dataset.source_path)
+    traing_start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -103,13 +116,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+
+            #[cyw]:record training time
+            if iteration % 500 == 0 :
+                traing_end_time = time.time()
+                with open(training_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([iteration, ema_loss_for_log, traing_end_time - traing_start_time])
+                traing_start_time = time.time()
             if iteration % 10 == 0:
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
 
                 # [cyw]: recording loss
-                with open(csv_file, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([iteration, ema_loss_for_log, iter_start.elapsed_time(iter_end)])
 
                 progress_bar.update(10)
             if iteration == opt.iterations:

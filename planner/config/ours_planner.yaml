@@ -1,7 +1,8 @@
 ###### configuration for fisher_planner ######
 action_space:
   min_height: 0.3
-  radius: 3
+  radius: 5
+  phi_min: 0.2617 # 15 degree = 0.2617 radian
 
 simulation_bridge:
   camera_type: uav/camera/left

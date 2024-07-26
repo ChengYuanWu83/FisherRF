@@ -136,7 +136,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # init_view.append(xyz_to_view(xyz=starting_view, radius=2))
     phi = 15 * (np.pi/180)
     theta = 0.0
-    init_view = [[phi, theta]]
+    init_view = [phi, theta]
 
     # random_initial_view = []
     # for _ in range(1):
@@ -174,7 +174,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     captured_start_time = time.time()
     nbv_planner.store_train_set()
     captured_end_time = time.time()
-    
+    if args.planner_type != "ours" :
+        nbv_planner.del_init_view(init_view)
     nbv_planner.store_test_set()
     # nbv = nbv_planner.plan_next_view()
     # nbv_planner.move_sensor(nbv)
@@ -194,7 +195,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
                                       N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
                                       num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
-                                      save_ply_each_time=args.save_ply_each_time)
+                                      save_ply_each_time=args.save_ply_each_time, save_ply_after_last_adding=args.save_ply_after_last_adding)
     print(f"schema: {schema.load_its}")
     #[cyw]: change to saving ply when adding the view
     saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
@@ -266,7 +267,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 #[cyw]:algorithm time
                 algo_start = time.time()
-                if args.planner_type == "fisher":
+                if args.planner_type == "ours" or args.planner_type == "fisher":
                     nbv = nbv_planner.plan_next_view(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
                 else:
                     nbv = nbv_planner.plan_next_view()
@@ -391,6 +392,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if (iteration in checkpoint_iterations):
             save_checkpoint(gaussians, iteration, scene)
     #[cyw]:training time
+    trainig_end_time = time.time()
     with open(training_time_csv, mode='a', newline='') as file:
         writer = csv.writer(file)
         writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
@@ -485,9 +487,10 @@ if __name__ == "__main__":
     rospy.init_node("simulator_experiment")
 
     parser = ArgumentParser(description="Training script parameters")
-
+    
+    #[cyw]: planner_type options: all, random, fisher, ours
     parser.add_argument(
-        "--planner_type", "-P", type=str, default="fisher", help="planner_type"
+        "--planner_type", "-P", type=str, default="ours", help="planner_type"
     )
 
     parser.add_argument(
@@ -576,6 +579,7 @@ if __name__ == "__main__":
     parser.add_argument("--maximum_view", type=int, default=10)
     parser.add_argument("--add_view", type=int, default=1)
     parser.add_argument("--save_ply_each_time", action="store_true")
+    parser.add_argument("--save_ply_after_last_adding", action="store_true")
 
 
     args = parser.parse_args(sys.argv[1:])

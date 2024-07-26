@@ -57,7 +57,7 @@ class VNSeqMInplace(BaseSchema):
     Add 1 image at a time
     """
 
-    def __init__(self, dataset_size: int, scene, N: int=20, M: int=1, num_init_views: int=4, interval_epochs = 100, iteration_base = 2000, save_ply_each_time = 0, **kwargs):
+    def __init__(self, dataset_size: int, scene, N: int=20, M: int=1, num_init_views: int=4, interval_epochs = 100, iteration_base = 2000, save_ply_each_time = 0, save_ply_after_last_adding = 0, **kwargs):
         """
         N: int total views to select
         M: # views to select each time
@@ -106,10 +106,11 @@ class VNSeqMInplace(BaseSchema):
                 self.load_its[it_base] = M
                 if save_ply_each_time == 1:
                     self.schema_ckpt.append(it_base-1)
-
                 cur_dataset_size += M
                 it_base += M * interval_epochs
                 num_views_left -= M
+        if save_ply_after_last_adding == 1:
+            self.schema_ckpt.append(it_base)
 
 V20Seq1Inplace = partial(VNSeqMInplace, N=20, M=1, num_init_views=4)
 V10Seq1Inplace = partial(VNSeqMInplace, N=10, M=1, num_init_views=2)

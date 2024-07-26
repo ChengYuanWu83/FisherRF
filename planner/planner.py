@@ -7,8 +7,9 @@ import numpy as np
 import imageio.v2 as imageio
 import yaml
 import json
-from geometry_msgs.msg import PoseStamped, Pose
+from geometry_msgs.msg import PoseStamped, Pose, TransformStamped
 from scipy.spatial.transform import Rotation as R
+import csv
 
 class Planner:
     def __init__(self, cfg):
@@ -39,7 +40,8 @@ class Planner:
 
         self.min_height = cfg["min_height"]
         self.radius = cfg["radius"]
-        self.phi_min = np.arcsin(self.min_height / self.radius)
+        # self.phi_min = np.arcsin(self.min_height / self.radius)
+        self.phi_min = cfg["phi_min"]
         self.phi_max = 0.5 * np.pi
         self.theta_min = 0
         self.theta_max = 2 * np.pi
@@ -63,8 +65,9 @@ class Planner:
                 self.move_sensor(view)
 
     def start(self, initial_view=None):
-        self.init_camera_pose(initial_view)
+        self.move_sensor(initial_view)
 
+        # self.init_camera_pose(initial_view)
         # while self.step < self.planning_budget:
         #     next_view = self.plan_next_view()
         #     self.move_sensor(next_view)
@@ -75,23 +78,34 @@ class Planner:
 
     def move_sensor(self, view):
         pose = utils.view_to_pose_with_target_point(view, self.radius)
-        pub_pose = Pose()
-        pub_pose = (self.simulator_bridge.move_uav(pose, self.record_path)).pose #[cyw]:change move_camera to move_uav
-        
-        # self.current_view = view
-        # self.current_pose = pose
+        pub_quaternion = utils.rotation_2_quaternion(pose[:3, :3])
+        pub_position = pose[:3, -1]
+        pub_pose = [*pub_position, *pub_quaternion]
         print(
             f"------flying to given pose and take measurement No.{self.step + 1} ------\n"
         )
-        #time.sleep(1)  # lazy solution to make sure we receive correct images
+        # current_pose = [*current_position, *current_orientation]
+        pub_time = time.time()
+        self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
         while(self.simulator_bridge.check_if_uav_arrive(pub_pose)==0): #[cyw]: check if uav reach
             print("flying")
+            self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
             time.sleep(0.1)
+        self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
+        #[cyw]: check again
+        while(self.simulator_bridge.check_if_uav_arrive(pub_pose)==0): #[cyw]: check if uav reach
+            print("flying")
         time.sleep(2.5)
 
-        # rgb, depth, captured_pose = self.simulator_bridge.get_image()
-        # self.record_step(view, pose, rgb, depth)
-        # print(f"view: {view}, pose: {pose}")
+        os.makedirs(self.record_path, exist_ok = True)
+        csv_file = (f"{self.record_path}/target_uav_pose.csv")
+        file_exists = os.path.isfile(csv_file)
+        with open(csv_file, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['timestamp','x', 'y', 'z', 'qx', 'qy', 'qz','qw'])
+            pose_for_csv = [pub_time, *pub_pose]
+            writer.writerow(pose_for_csv)
         self.step += 1
 
     def plan_next_view(self):
@@ -212,7 +226,7 @@ class Planner:
         transform = utils.quaternion_to_rotation_matrix(captured_pose)
         opengltransform = np.eye(4)
         euler = R.from_matrix(transform[:3, :3]).as_euler('xyz')
-        print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
+        # print(f"origin euler: roll: {euler[0]}, pitch: {euler[1]}, yaw:{euler[2]}")
         new_euler = np.empty(3)
         new_euler[0] = euler[1] + (np.pi/2)
         new_euler[1] = euler[0]

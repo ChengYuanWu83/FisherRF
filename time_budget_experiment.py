@@ -41,7 +41,41 @@ from utils.cluster_manager import ClusterStateManager
 from active.schema import schema_dict
 from lpipsPyTorch import lpips, lpips_func
 from utils.image_utils import psnr
+import time
+import csv
 
+#[cyw]:setup_csv
+def setup_csv(path):
+    training_time_csv = f"{path}/training_time.csv"
+    training_file_exists = os.path.isfile(training_time_csv)
+    if not training_file_exists:
+        with open(training_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['iterations', 'loss', 'times'])
+    
+    algo_time_csv = f"{path}/algo_time.csv"
+    algo_file_exists = os.path.isfile(algo_time_csv)
+    if not algo_file_exists:
+        with open(algo_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['select_idxs', 'times'])
+
+    flying_time_csv = f"{path}/flying_time.csv"
+    flying_file_exists = os.path.isfile(flying_time_csv)
+    if not flying_file_exists:
+        with open(flying_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    captured_time_csv = f"{path}/captured_time.csv"
+    captured_file_exists = os.path.isfile(captured_time_csv)
+    if not captured_file_exists:
+        with open(captured_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['pose_idxs', 'times'])
+
+    return training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv
+    
 csm = ClusterStateManager()
 
 planner_title = {
@@ -82,32 +116,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # planning experiment in simulator using baseline planners and our planner
 
     setup_random_seed(10)
-    # planner_type_list = ["max_distance", "random"]
-
+    
     experiment_path = dataset.source_path
+    time_budget = args.time_budget
 
-
-    # experiment_path = os.path.join(
-    #     root_dir,
-    #     "experiments",
-    #     "simulator",
-    #     datetime.now().strftime("%d-%m-%Y-%H-%M"),
-    # )
+    
     os.makedirs(experiment_path, exist_ok=True)
 
     print("---------- planning ----------")
     
-    # initialize planning with 2 same views
-    init_view = []
-    starting_view = np.array([1.0, 0.0, 0.5])
-    init_view.append(xyz_to_view(xyz=starting_view, radius=2))
-
-    # random_initial_view = []
-    # for _ in range(1):
-    #     random_initial_view.append(
-    #         uniform_sampling(radius=2, phi_min=0.15)
-    #     )  # hard-coded, should be the same for config file
-    #     print(f"random_initial_view: {random_initial_view}")
+    phi = 15 * (np.pi/180)
+    theta = 0.0
+    init_view = [phi, theta]
 
     # [cyw]: setup planner type
     planner_type = args.planner_type
@@ -128,13 +148,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     planner_cfg["experiment_path"] = experiment_path
     planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
     print(planner_cfg)
-    nbv_planner = get_planner(planner_cfg, args)
-    if args.num_init_views == 1 :
-        nbv_planner.start(initial_view=init_view)
-        nbv_planner.store_train_set(0)
-        nbv_planner.store_test_set()
-    
+    nbv_planner = get_planner(planner_cfg)
+    #[cyw]:flying time
+    flying_start_time = time.time()
+    nbv_planner.start(initial_view=init_view)
+    flying_end_time = time.time()
 
+    #[cyw]:captured time
+    captured_start_time = time.time()
+    nbv_planner.store_train_set()
+    captured_end_time = time.time()
+
+    time_budget = time_budget - (captured_end_time - flying_start_time)
+    
+    if args.planner_type != "ours" :
+        nbv_planner.del_init_view(init_view)
+    nbv_planner.store_test_set()
     # nbv = nbv_planner.plan_next_view()
     # nbv_planner.move_sensor(nbv)
 
@@ -150,14 +179,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians.training_setup(opt)
 
     #[cyw]: setup schema
-    schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
-                                      N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
-                                      num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
-                                      save_ply_each_time=args.save_ply_each_time)
-    print(f"schema: {schema.load_its}")
+    # schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
+    #                                   N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
+    #                                   num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
+    #                                   save_ply_each_time=args.save_ply_each_time, save_ply_after_last_adding=args.save_ply_after_last_adding)
+    # print(f"schema: {schema.load_its}")
     #[cyw]: change to saving ply when adding the view
-    saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
-    print(saving_iterations)
+    # saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
+    # print(saving_iterations)
 
     # print(f"scene.train_idxs: {scene.train_idxs}")
     init_ckpt_path = f"{args.model_path}/init.ckpt"
@@ -169,7 +198,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     if first_iter == 0: # maybe init_ckpt has been save if preempted
         save_checkpoint(gaussians, first_iter, scene, base_iter, save_path=init_ckpt_path, save_last=False)
+
+    #[cyw]:write csv
+    training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv = setup_csv(args.model_path)
+    pose_idxs = 0 
+    with open(flying_time_csv, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+
+    with open(captured_time_csv, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
     
+
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     
@@ -180,6 +221,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    trainig_start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):        
         
         if network_gui.conn == None:
@@ -197,24 +239,56 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             except Exception as e:
                 network_gui.conn = None
         
-        num_views = schema.num_views_to_add(iteration)
-        if num_views > 0:
+        trainig_end_time = time.time()
+        # [cyw]: time_budget 
+        if (time_budget > 0) and ((trainig_end_time - trainig_start_time) > 2):
             try:
+                if args.save_ply_each_time:
+                    scene.save(iteration)
+                print(f"Start choose the nbv after ITER { iteration}")
                 # For sectioned training
-                candidate_views_filter = getattr(schema, "candidate_views_filter")[iteration] if hasattr(schema, "candidate_views_filter") else None
-                scene.candidate_views_filter = candidate_views_filter
+                # candidate_views_filter = getattr(schema, "candidate_views_filter")[iteration] if hasattr(schema, "candidate_views_filter") else None
+                # scene.candidate_views_filter = candidate_views_filter
                 # Because selection is time consumeing ({cyw}:uncertainty estimation callback function)
-                # [cyw]: select nbv
-                if args.planner_type == "fisher":
+                num_views = 1
+                # [cyw]: select nbv          
+                # [cyw]:algorithm time
+                algo_start = time.time()
+                if args.planner_type == "ours" or args.planner_type == "fisher":
                     nbv = nbv_planner.plan_next_view(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
                 else:
                     nbv = nbv_planner.plan_next_view()
+                algo_end = time.time()
 
+                flying_start_time = time.time()
                 nbv_planner.move_sensor(nbv)
+                flying_end_time = time.time()
                 print(f"ITER {iteration}: NBV: {nbv}")
-                nbv_planner.store_train_set()
 
-                #selected_views = active_method.nbvs(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
+                #[cyw]:captured time
+                captured_start_time = time.time()
+                nbv_planner.store_train_set()
+                captured_end_time = time.time()
+                pose_idxs += 1
+                with open(training_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
+
+                with open(algo_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([pose_idxs, algo_end - algo_start])
+
+                with open(flying_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+
+                with open(captured_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
+
+                time_budget = time_budget - (captured_end_time - trainig_start_time)
+                trainig_start_time = time.time()
+                
             except RuntimeError as e:
                 print(e)
                 print("selector exited early")
@@ -224,10 +298,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             #print(f"ITER {iteration}: selected views: {selected_views}")
 
-            #scene.train_idxs.extend([len(scene.train_idxs)])
-            #scene.add_new_cameras(args, nbv_planner.record_path)
+            scene.train_idxs.extend([len(scene.train_idxs)])
+            scene.add_new_cameras(args, nbv_planner.record_path)
             
-            # print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
+            print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
 
             gaussians.optimizer.zero_grad(set_to_none = True)
 
@@ -274,14 +348,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            before_selection = schema.num_views_to_add(iteration + 1) > 0
+            # before_selection = schema.num_views_to_add(iteration + 1) > 0
+            before_selection = False
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
                             testing_iterations, scene, render, (pipe, background), before_selection=before_selection, 
                             log_every_image=args.log_every_image)
             if (iteration in saving_iterations): 
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration * args.num_init_views) #[cyw]: change to avoid same name
+                scene.save(iteration)
 
             # Densification
             cur_iter = iteration - base_iter
@@ -305,6 +380,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         if (iteration in checkpoint_iterations):
             save_checkpoint(gaussians, iteration, scene)
+    #[cyw]:training time
+    trainig_end_time = time.time()
+    with open(training_time_csv, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
     wandb.finish()
 
 def prepare_output_and_logger(args):    
@@ -396,9 +476,10 @@ if __name__ == "__main__":
     rospy.init_node("simulator_experiment")
 
     parser = ArgumentParser(description="Training script parameters")
-
+    
+    #[cyw]: planner_type options: all, random, fisher, ours
     parser.add_argument(
-        "--planner_type", "-P", type=str, default="random", help="planner_type"
+        "--planner_type", "-P", type=str, default="ours", help="planner_type"
     )
 
     parser.add_argument(
@@ -474,9 +555,9 @@ if __name__ == "__main__":
     # fisherrf
     parser.add_argument("--schema", type=str, default="all")
     parser.add_argument("--reg_lambda", type=float, default=1e-6)
-    parser.add_argument("--sh_up_every", type=int, default=1_000, help="increase spherical harmonics every N iterations")
-    parser.add_argument("--sh_up_after", type=int, default=-1, help="start to increate active_sh_degree after N iterations")    
-    parser.add_argument("--min_opacity", type=float, default=0.005, help="min_opacity to prune")
+    parser.add_argument("--sh_up_every", type=int, default=1_000, help="increase spherical harmonics every N iterations")  #[cyw]:fisher:5000, original 3DGS:1000
+    parser.add_argument("--sh_up_after", type=int, default=-1, help="start to increate active_sh_degree after N iterations")   #[cyw]:fisher:-1, original 3DGS:-1
+    parser.add_argument("--min_opacity", type=float, default=0.005, help="min_opacity to prune") #[cyw]:fisher:0.005, original 3DGS:0.005
     parser.add_argument("--log_every_image", action="store_true", help="log every images during traing")
     parser.add_argument("--filter_out_grad", nargs="+", type=str, default=["rotation"])
 
@@ -487,7 +568,8 @@ if __name__ == "__main__":
     parser.add_argument("--maximum_view", type=int, default=10)
     parser.add_argument("--add_view", type=int, default=1)
     parser.add_argument("--save_ply_each_time", action="store_true")
-
+    parser.add_argument("--save_ply_after_last_adding", action="store_true")
+    parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

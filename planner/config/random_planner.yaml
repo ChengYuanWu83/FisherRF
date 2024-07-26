@@ -1,7 +1,8 @@
 ###### configuration for random_planner ######
 action_space:
   min_height: 0.3
-  radius: 3
+  radius: 5
+  phi_min: 0.2617 # 15 degree = 0.2617 radian
 
 simulation_bridge:
   camera_type: uav/camera/left
@@ -12,7 +13,7 @@ initial_num: 1
 # step_phi: 0.5
 # step_theta: 0.5
 planning_type: local
-view_change: 0.78 # 60 degree = 1.05 radian, 45 degree = 0.78 radian
+view_change: 1.05 # 60 degree = 1.05 radian, 45 degree = 0.78 radian
 num_candidates: 50
 random_distance: false
 initial_type: random
