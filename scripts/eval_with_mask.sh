@@ -1,6 +1,6 @@
 DATASET_PATH=/home/nmsl/nbv_simulator_data
 EXP_PATH=/home/nmsl/FisherRF/exp_results
-declare -a arr=("circular_new_test" "ours_20_new_test")
+declare -a arr=("change_algo/circular_new_test")
 # declare -a arr=("random" "fisher")
 # for i in "${arr[@]}"
 # do
@@ -16,5 +16,6 @@ do
         # cp -r $DATASET_PATH/test_set/test $DATASET_PATH/$i/test
         # cp $DATASET_PATH/test_set/transforms_test.json $DATASET_PATH/$i/transforms_test.json
         python render.py -s $DATASET_PATH/$i -m $EXP_PATH/$i --eval
-        python metrics.py -m $EXP_PATH/$i
+        python generate_mask.py -m $EXP_PATH/$i
+        python evaluation.py -m $EXP_PATH/$i
 done

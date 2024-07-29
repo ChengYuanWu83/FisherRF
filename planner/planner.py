@@ -77,7 +77,7 @@ class Planner:
         # rospy.signal_shutdown("shut down ros node")
 
     def move_sensor(self, view):
-        pose = utils.view_to_pose_with_target_point(view, self.radius)
+        pose = utils.view_to_pose_with_target_point(view)
         pub_quaternion = utils.rotation_2_quaternion(pose[:3, :3])
         pub_position = pose[:3, -1]
         pub_pose = [*pub_position, *pub_quaternion]

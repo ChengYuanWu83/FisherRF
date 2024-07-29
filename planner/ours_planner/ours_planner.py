@@ -16,6 +16,9 @@ class OursPlanner(Planner):
         self.view_change = cfg["view_change"]
         self.planning_type = cfg["planning_type"]
 
+        self.radius_start = 3
+        self.radius_end = 5
+
         #self.seed = args.seed
         self.reg_lambda = 1e-6
         filter_out_grad = ["rotation"]
@@ -144,7 +147,7 @@ class OursPlanner(Planner):
         return selected_idxs
     
     def plan_next_view(self, gaussians, scene: Scene, num_views, pipe, background, exit_func):
-        view_list = np.empty((self.num_candidates, 2))
+        view_list = np.empty((self.num_candidates, 3))
         
         current_pose = []
         cp = self.simulator_bridge.current_pose
@@ -156,7 +159,7 @@ class OursPlanner(Planner):
             for i in range(self.num_candidates):
                 view_list[i] = random_view(
                     current_pose, #[cyw]: change planner pose to ros pose, oringinal: self.current_pose[:3, 3]
-                    self.radius,
+                    self.radius_start, self.radius_end,
                     self.phi_min,
                     min_view_change=0.2,
                     max_view_change=self.view_change,
@@ -164,12 +167,12 @@ class OursPlanner(Planner):
             #print(f"view_list: {view_list}") #[cyw]: phi, theta
         elif self.planning_type == "global":
             for i in range(self.num_candidates):
-                view_list[i] = uniform_sampling(self.radius, self.phi_min)
+                view_list[i] = uniform_sampling(self.radius_start, self.radius_end, self.phi_min)
 
         candidate_cams = []
         # [cyw]: transform random_view(phi, theta) to cam in order to get the novel view
         for view in view_list:
-            candidate_cams.append(view_to_cam(view, self.radius, self.camera_info))
+            candidate_cams.append(view_to_cam(view, self.camera_info))
 
         # for cam in candidate_cams:
 

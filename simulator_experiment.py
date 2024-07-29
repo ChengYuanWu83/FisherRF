@@ -136,7 +136,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # init_view.append(xyz_to_view(xyz=starting_view, radius=2))
     phi = 15 * (np.pi/180)
     theta = 0.0
-    init_view = [phi, theta]
+    radius = 3
+    init_view = [phi, theta, radius]
 
     # random_initial_view = []
     # for _ in range(1):

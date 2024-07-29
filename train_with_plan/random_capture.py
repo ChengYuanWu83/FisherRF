@@ -102,7 +102,9 @@ if __name__ == "__main__":
     parser.add_argument("--record", action="store_true", help="record time")
     parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
     parser.add_argument("--sort_view", action="store_true", help="sort_view")
-    parser.add_argument("--sampling_method", type=str, default="sphere", help="options: random, sphere")
+    parser.add_argument("--sampling_method", type=str, default="random", help="options: random, sphere")
+    parser.add_argument("--radius_start", type=float, default=2.0, help="radius range")
+    parser.add_argument("--radius_end", type=float, default=5.0, help="radius range")
     args = parser.parse_args()
 
     print(
@@ -126,17 +128,18 @@ if __name__ == "__main__":
 
     view_list = None
     if args.sampling_method == "random":
-        view_list = np.empty((args.candidate_views_num, 2))
+        view_list = np.empty((args.candidate_views_num, 3))
         for i in range(args.candidate_views_num):
-            view_list[i] = uniform_sampling(args.radius, args.phi_min)
+            view_list[i] = uniform_sampling(args.radius_start, args.radius_end, args.phi_min)
     elif args.sampling_method == "sphere":
-        view_list = sphere_sampling(longtitude_range = 16 ,latitude_range = 4)
+        view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4,
+                                    radius_start = args.radius_start, radius_end = args.radius_end) 
         np.random.shuffle(view_list)
     else:
         print(f"unknown sampling method {args.sampling_method}")
 
     # sort the view to enhance the flying time
-    if args.sort_view:
+    if args.sort_view or args.set_type == "test":
         sorted_indices = np.argsort(view_list[:, 1])
         view_list = view_list[sorted_indices]
 
@@ -146,7 +149,7 @@ if __name__ == "__main__":
     time_budget = args.time_budget
     # move to the all candidate views
     for view in view_list:
-        if time_budget > 0:
+        if time_budget > 0 or args.set_type == "test":
             flying_start_time = time.time()
             nbv_planner.move_sensor(view)
             flying_end_time = time.time()

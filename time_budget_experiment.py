@@ -119,7 +119,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     
     experiment_path = dataset.source_path
     time_budget = args.time_budget
-
+    num_views_needed = args.maximum_view
     
     os.makedirs(experiment_path, exist_ok=True)
 
@@ -127,7 +127,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     
     phi = 15 * (np.pi/180)
     theta = 0.0
-    init_view = [phi, theta]
+    radius = 3
+    init_view = [phi, theta, radius]
 
     # [cyw]: setup planner type
     planner_type = args.planner_type
@@ -149,6 +150,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
     print(planner_cfg)
     nbv_planner = get_planner(planner_cfg)
+    num_views_needed -= 1 
     #[cyw]:flying time
     flying_start_time = time.time()
     nbv_planner.start(initial_view=init_view)
@@ -241,7 +243,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         trainig_end_time = time.time()
         # [cyw]: time_budget 
-        if (time_budget > 0) and ((trainig_end_time - trainig_start_time) > 2):
+        if (time_budget > 0) and ((trainig_end_time - trainig_start_time) > 10) and num_views_needed > 0:
             try:
                 if args.save_ply_each_time:
                     scene.save(iteration)
@@ -287,6 +289,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
 
                 time_budget = time_budget - (captured_end_time - trainig_start_time)
+                num_views_needed -= 1 
                 trainig_start_time = time.time()
                 
             except RuntimeError as e:
@@ -565,11 +568,11 @@ if __name__ == "__main__":
     parser.add_argument("--iteration_base", type=int, default=2000)
     parser.add_argument("--num_init_views", type=int, default=1)
     parser.add_argument("--interval_epochs", type=int, default=100)
-    parser.add_argument("--maximum_view", type=int, default=10)
+    parser.add_argument("--maximum_view", type=int, default=12)
     parser.add_argument("--add_view", type=int, default=1)
     parser.add_argument("--save_ply_each_time", action="store_true")
     parser.add_argument("--save_ply_after_last_adding", action="store_true")
-    parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
+    parser.add_argument("--time_budget", type=float, default=10000.0, help="time budget")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

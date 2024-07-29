@@ -56,7 +56,7 @@ def xyz_to_view(xyz, radius): #half sphere look inside
     phi = np.arcsin(xyz[2] / radius)  # phi from 0 to 0.5*pi, vertical
     theta = np.arctan2(xyz[1], xyz[0]) % (2 * np.pi)  # theta from 0 to 2*pi, horizontal
 
-    return [phi, theta]
+    return [phi, theta, radius]
 
 
 def view_to_pose(view, radius):
@@ -78,8 +78,8 @@ def view_to_pose(view, radius):
     pose[:3, :3] = rotation
     return pose
 
-def view_to_pose_with_target_point(view, radius, target=[0, 0, 0]):
-    phi, theta = view
+def view_to_pose_with_target_point(view, target=[0, 0, 0]):
+    phi, theta, radius= view
 
     # phi should be within [min_phi, 0.5*np.pi)
     if phi >= 0.5 * np.pi:
@@ -185,11 +185,11 @@ def view_to_pose_batch(views, radius):
     return poses
 
 
-def random_view(current_xyz, radius, phi_min, min_view_change, max_view_change):
+def random_view(current_xyz, radius_start, radius_end, phi_min, min_view_change, max_view_change):
     """
     random scatter view direction changes by given current position and view change range.
     """
-
+    radius = np.random.uniform(low=radius_start, high=radius_end)
     u = current_xyz / np.linalg.norm(current_xyz)
 
     # pick a random vector:
@@ -203,7 +203,7 @@ def random_view(current_xyz, radius, phi_min, min_view_change, max_view_change):
     random_view_change = np.random.uniform(low=min_view_change, high=max_view_change)
     cosine = np.cos(random_view_change)
     w = cosine * u + np.sqrt(1 - cosine**2 + 1e-8) * uperp
-    w = radius * w / np.linalg.norm(w)
+    w = np.linalg.norm(current_xyz) * w / np.linalg.norm(w)
 
     view = xyz_to_view(w, radius)
 
@@ -215,12 +215,12 @@ def random_view(current_xyz, radius, phi_min, min_view_change, max_view_change):
     return view
 
 
-def uniform_sampling(radius, phi_min):
+def uniform_sampling(radius_start, radius_end, phi_min):
     """
     uniformly generate unit vector on hemisphere.
     then calculate corresponding view direction targeting coordinate origin.
     """
-
+    radius = np.random.uniform(low=radius_start, high=radius_end)
     xyz = np.array([0.0, 0.0, 0.0])
 
     # avoid numerical error
@@ -238,8 +238,9 @@ def uniform_sampling(radius, phi_min):
     #     view[0] = 0.5
     return view
 
-def sphere_sampling(longtitude_range, latitude_range):
-    view_list = np.empty((latitude_range * longtitude_range, 2))
+def sphere_sampling(longtitude_range, latitude_range, radius_start, radius_end):
+    radius_list = np.arange(start=radius_start, stop=radius_end+1, step=1)
+    view_list = np.empty((latitude_range * longtitude_range * len(radius_list), 3))
 
     latitude_interval = 15
     phi_list = np.arange(1, latitude_range + 1) * latitude_interval * (np.pi / 180)    #[cyw]:phi_list
@@ -250,9 +251,11 @@ def sphere_sampling(longtitude_range, latitude_range):
     index = 0 
     for phi in phi_list:
         for theta in theta_list:
-            view_list[index][0] = phi
-            view_list[index][1] = theta
-            index += 1
+            for radius in radius_list:
+                view_list[index][0] = phi
+                view_list[index][1] = theta
+                view_list[index][2] = radius
+                index += 1
 
     # # sorted_indices = np.argsort(view_list[:, 1])
     # view_list = view_list[sorted_indices]
@@ -462,8 +465,8 @@ def get_camera_json(camera_info):
     record_dict["aabb_scale"] = 2.0
     return record_dict
 
-def view_to_cam(view, radius,camera_info):
-    transform = view_to_pose_with_target_point(view, radius)
+def view_to_cam(view,camera_info):
+    transform = view_to_pose_with_target_point(view)
 
     # [cyw]:rotate to opengl transform
     opengltransform = np.eye(4)

@@ -14,8 +14,13 @@ class FisherPlanner(Planner):
         super().__init__(cfg)
         self.num_candidates = cfg["num_candidates"]
         self.view_change = cfg["view_change"]
-        self.planning_type = cfg["planning_type"]
-        self.candidate_view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4) 
+        self.planning_type = cfg["planning_type"]        
+        
+        self.radius_start = 3
+        self.radius_end = 5
+
+        self.candidate_view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4,
+                                                   radius_start = self.radius_start, radius_end =self.radius_end) 
 
         #self.seed = args.seed
         self.reg_lambda = 1e-6
@@ -150,7 +155,7 @@ class FisherPlanner(Planner):
         candidate_cams = []
         # [cyw]: transform random_view(phi, theta) to cam in order to get the novel view
         for view in view_list:
-            candidate_cams.append(view_to_cam(view, self.radius, self.camera_info))
+            candidate_cams.append(view_to_cam(view, self.camera_info))
 
         #nbv_index = np.random.choice(len(view_list))
         nbv_index = self.nbvs(gaussians, scene, num_views, pipe, background, candidate_cams, exit_func)
