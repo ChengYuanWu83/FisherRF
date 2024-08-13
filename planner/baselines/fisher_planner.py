@@ -16,8 +16,6 @@ class FisherPlanner(Planner):
         self.view_change = cfg["view_change"]
         self.planning_type = cfg["planning_type"]        
         
-        self.radius_start = 3
-        self.radius_end = 5
 
         self.candidate_view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4,
                                                    radius_start = self.radius_start, radius_end =self.radius_end) 

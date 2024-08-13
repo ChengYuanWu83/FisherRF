@@ -8,6 +8,7 @@ import os
 import imageio
 from scene.cameras import FakeCam
 from geometry_msgs.msg import PoseStamped, Pose, TransformStamped
+import time
 
 def get_roi_mask(rgb):
     """binary mask for ROIs using color thresholding"""
@@ -57,6 +58,13 @@ def xyz_to_view(xyz, radius): #half sphere look inside
     theta = np.arctan2(xyz[1], xyz[0]) % (2 * np.pi)  # theta from 0 to 2*pi, horizontal
 
     return [phi, theta, radius]
+
+def view_to_xyz(view):
+    phi, theta, radius = view
+    x = radius * np.sin(phi) * np.cos(theta)
+    y = radius * np.sin(phi) * np.sin(theta)
+    z = radius * np.cos(phi)
+    return [x, y, z]
 
 
 def view_to_pose(view, radius):
@@ -220,6 +228,9 @@ def uniform_sampling(radius_start, radius_end, phi_min):
     uniformly generate unit vector on hemisphere.
     then calculate corresponding view direction targeting coordinate origin.
     """
+    n = int(time.time_ns() % 1000000) #need to change
+    np.random.seed(n)
+
     radius = np.random.uniform(low=radius_start, high=radius_end)
     xyz = np.array([0.0, 0.0, 0.0])
 
@@ -239,8 +250,19 @@ def uniform_sampling(radius_start, radius_end, phi_min):
     return view
 
 def sphere_sampling(longtitude_range, latitude_range, radius_start, radius_end):
-    radius_list = np.arange(start=radius_start, stop=radius_end+1, step=1)
-    view_list = np.empty((latitude_range * longtitude_range * len(radius_list), 3))
+    # radius_list = np.arange(start=radius_start, stop=radius_end+1, step=1)
+    order = []
+    start = radius_start
+    end = radius_end
+    while start <= end:
+        order.append(start)
+        start += 1
+        if start <= end:
+            order.append(end)
+            end -= 1
+    order.reverse()
+
+    view_list = np.empty((latitude_range * longtitude_range *10, 3))
 
     latitude_interval = 15
     phi_list = np.arange(1, latitude_range + 1) * latitude_interval * (np.pi / 180)    #[cyw]:phi_list
@@ -249,14 +271,26 @@ def sphere_sampling(longtitude_range, latitude_range, radius_start, radius_end):
         theta_list[i] = (360/longtitude_range) * i * (np.pi / 180)
 
     index = 0 
-    for phi in phi_list:
-        for theta in theta_list:
-            for radius in radius_list:
+    # for radius in radius_list:
+    #     for phi in phi_list:
+    #         for theta in theta_list:
+    #             view_list[index][0] = phi
+    #             view_list[index][1] = theta
+    #             view_list[index][2] = radius
+    #             index += 1
+    # n = int(time.time_ns() % 1000000) #need to change
+    # np.random.seed(n)
+
+    # radius = np.random.uniform(low=radius_start, high=radius_end)
+    for i in range(10):
+        for phi in phi_list:
+            for theta in theta_list:
+                r = index % len(order)
+                radius = order[r]
                 view_list[index][0] = phi
                 view_list[index][1] = theta
                 view_list[index][2] = radius
                 index += 1
-
     # # sorted_indices = np.argsort(view_list[:, 1])
     # view_list = view_list[sorted_indices]
     return view_list

@@ -255,6 +255,6 @@ class SimulatorBridge:
         if distance < 0.5 and orientation_diff < 10:  # You can adjust the threshold
             #self.reach_publisher.publish("reach")
             print(f"Distance to desired pose: {distance}, and orientation_diff: {orientation_diff}")
-            print("UAV has reached the desired pose")
+            # print(f"UAV has reached the desired pose {desired_pose}, current pose {current_pose}")
             return 1
         return 0

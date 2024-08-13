@@ -1,27 +1,33 @@
-## declare an array variable
-declare -a arr=("all" "random" "fisher")
+# ## declare an array variable
+declare -a arr=(4 10)
+echo $arr
+# # ## now loop through the above array
+# for i in "${arr[@]}"
+# do
+#     echo "$i/"
+# done
 
-## now loop through the above array
-for i in "${arr[@]}"
-do
-if [ $i = all ]; then
-    echo "The strings are equal."
-else
-    echo "The strings are not equal."
-fi
+
+
+#!/bin/bash
+# DATASET_PATH=/home/nmsl/nbv_simulator_data
+# i=circular_fisher_tb400_sn20_id3
+# TT=$(find /home/nmsl/FisherRF/exp_results/circular_dp_tb100_sn20_tc1_id0/point_cloud -name 'iteration_*')
+
+# 使用 echo 和 awk 仅提取 iteration_ 后面的数字
+for file in $TT; do
+    number=$(echo "$file" | awk -F'iteration_' '{print $2}')
+    echo "$number"
 done
 
-
-exp_name=random
-DATASET_PATH=/home/nmsl/nbv_simulator_data/
-EXP_PATH=/home/nmsl/FisherRF/exp_results/
-echo $DATASET_PATH
-
-# mkdir ../nbv_plot_data/$exp_name
-# mv ${EXP_PATH}/algo_time.csv ../nbv_plot_data/$exp_name/algo_time.csv
-# mv ${EXP_PATH}/captured_time.csv ../nbv_plot_data/$exp_name/captured_time.csv
-# mv ${EXP_PATH}/flying_time.csv ../nbv_plot_data/$exp_name/flying_time.csv
-# mv ${EXP_PATH}/training_time.csv ../nbv_plot_data/$exp_name/training_time.csv
-
-
-cp -r $DATASET_PATH/test1/transforms_test.json $DATASET_PATH/test2/transforms_test.json
+# find "$BASE_DIR" -type d -name 'test' | while read TEST_DIR; do
+#     # 在 test 子資料夾內查找符合 our_* 的檔案
+#     FILE=$(find "$TEST_DIR" -maxdepth 1 -type f -name 'our_*')
+    
+#     # 如果檔案存在，進行處理
+#     if [[ -f "$FILE" ]]; then
+#         echo "Processing file: $FILE"
+#         # 例如，讀取檔案內容
+#         cat "$FILE"
+#     fi
+# done

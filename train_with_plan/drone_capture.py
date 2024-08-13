@@ -120,9 +120,11 @@ if __name__ == "__main__":
     parser.add_argument("--radius_start", type=float, default=3.0, help="radius range")
     parser.add_argument("--radius_end", type=float, default=10.0, help="radius range")
     parser.add_argument("--phi_min", type=float, default=0.2617, help="the minimum of phi in uniform_sampling")
+    parser.add_argument("--sampling_method", type=str, default="random", help="options: random, circular")
+    parser.add_argument("--set_type", type=str, default="train", help="train set or test set")
     parser.add_argument("--experiment_path", type=str, required=True, help="must be defined in evaluation mode")
     parser.add_argument("--views_num", type=int, default="5", help="the number of candidate views")
-    parser.add_argument("--test_set", action="store_true", help="create empty test set")
+    parser.add_argument("--sort_view", action="store_true", help="sort_view")
     parser.add_argument("--record", action="store_true", help="record time")
     parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
     args = parser.parse_args()
@@ -145,51 +147,63 @@ if __name__ == "__main__":
     # planner_cfg.update(__dict__)
     planner_cfg["planner_type"] = "random"
     planner_cfg["experiment_path"] = args.experiment_path
-    # planner_cfg["action_space"]["radius"] = args.radius
-    # planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
+    planner_cfg["radius_start"] = args.radius_start
+    planner_cfg["radius_end"] = args.radius_end
+    planner_cfg["sampling_method"] = args.sampling_method
     print(planner_cfg)
     nbv_planner = get_planner(planner_cfg)
     camera_info = nbv_planner.simulator_bridge.camera_info
 
-    if args.test_set == True:
+    if args.set_type == "train":
         create_empty_test_set(args.experiment_path, camera_info)
 
-    view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4,
+    if args.sampling_method == "random":
+        main_view_list = np.empty((100, 3))
+        for i in range(100):
+            main_view_list[i] = uniform_sampling(args.radius_start, args.radius_end, args.phi_min)
+    elif args.sampling_method == "circular":
+        main_view_list = sphere_sampling(longtitude_range = 16, latitude_range = 4,
                                     radius_start = args.radius_start, radius_end = args.radius_end) 
 
-    # # sorted_indices = np.argsort(view_list[:, 1])
-    # view_list = view_list[sorted_indices]
-    print(view_list)
+
+
+
     # move to the all candidate views
     pose_idxs = 0
     time_budget = args.time_budget
-    for view in view_list:
-        if time_budget > 0:
-            flying_start_time = time.time()
-            nbv_planner.move_sensor(view)
-            flying_end_time = time.time()
-            # time.sleep(2.5)
-            if time_budget - (flying_end_time - flying_start_time) < 0:
-                time_budget = 0 
-                continue
-            captured_start_time = time.time()
-            rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
-            save_image_into_train_set(args.experiment_path, captured_pose, rgb, camera_info)
-            captured_end_time = time.time()
+    while time_budget > 0:      
+        view_list = main_view_list[pose_idxs:pose_idxs+args.views_num]
+        if args.sort_view or args.set_type == "test":
+            sorted_indices = np.lexsort((view_list[:,1], view_list[:,0]))
+            view_list = view_list[sorted_indices]
+        print(view_list)
+        for view in view_list:
+            if time_budget > 0:
+                flying_start_time = time.time()
+                nbv_planner.move_sensor(view)
+                flying_end_time = time.time()
+                # time.sleep(2.5)
+                if time_budget - (flying_end_time - flying_start_time) < 0 and pose_idxs > 0:
+                    time_budget = 0 
+                    continue
+                captured_start_time = time.time()
+                rgb, depth, captured_pose = nbv_planner.simulator_bridge.get_image()
+                save_image_into_train_set(args.experiment_path, captured_pose, rgb, camera_info)
+                captured_end_time = time.time()
 
-            if args.record == True and pose_idxs == 0:
-                flying_time_csv, captured_time_csv = setup_csv(args.experiment_path)
+                if args.record == True and pose_idxs == 0:
+                    flying_time_csv, captured_time_csv = setup_csv(args.experiment_path)
 
-            if args.record == True: 
-                with open(flying_time_csv, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+                if args.record == True: 
+                    with open(flying_time_csv, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([pose_idxs, flying_end_time - flying_start_time])
 
-                with open(captured_time_csv, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
-            pose_idxs += 1    
-            if pose_idxs == 1:
-                continue
+                    with open(captured_time_csv, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
+                pose_idxs += 1    
+                if pose_idxs == 1:
+                    continue
 
-            time_budget = time_budget - (captured_end_time - flying_start_time)
+                time_budget = time_budget - (captured_end_time - flying_start_time)

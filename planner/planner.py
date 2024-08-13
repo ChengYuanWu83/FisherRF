@@ -13,6 +13,12 @@ import csv
 
 class Planner:
     def __init__(self, cfg):
+        #[cyw]: my parameter
+        self.planning_time = 0
+        self.radius_start = cfg["radius_start"]
+        self.radius_end = cfg["radius_end"]
+        self.sampling_method = cfg["sampling_method"]
+
         self.simulator_bridge = SimulatorBridge(cfg["simulation_bridge"])
         self.camera_info = self.simulator_bridge.camera_info
 
@@ -87,14 +93,14 @@ class Planner:
         # current_pose = [*current_position, *current_orientation]
         pub_time = time.time()
         self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
-        while(self.simulator_bridge.check_if_uav_arrive(pub_pose)==0): #[cyw]: check if uav reach
-            print("flying")
+        while not self.simulator_bridge.check_if_uav_arrive(pub_pose): #[cyw]: check if uav reach
+            # print("flying")
             self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
             time.sleep(0.1)
         self.simulator_bridge.slow_move_uav_in_rotations(pub_pose)
         #[cyw]: check again
-        while(self.simulator_bridge.check_if_uav_arrive(pub_pose)==0): #[cyw]: check if uav reach
-            print("flying")
+        while not self.simulator_bridge.check_if_uav_arrive(pub_pose): #[cyw]: check if uav reach
+            pass
         time.sleep(2.5)
 
         os.makedirs(self.record_path, exist_ok = True)
@@ -239,16 +245,42 @@ class Planner:
             "file_path": train_image_file,
             "transform_matrix": opengltransform.tolist(),
         }
-
-
         # #[cyw]:chage json file function for checking image i/o
-        # transform_json_file2 = (f"/home/nmsl/nerf_synthetic/iocheck/transforms_train.json")
-        # if os.path.isfile(transform_json_file2):
-        #     # Read the existing data
-        #     with open(transform_json_file2, 'r') as f:
-        #         record_dict2 = json.load(f)
-        # data_frame = record_dict2["frames"][i]
     
         record_dict["frames"].append(data_frame)
         with open(transform_json_file, "w") as f:
             json.dump(record_dict, f, indent=4)
+    
+    def sampling_view(self, sampling_method, num):
+        if sampling_method  == "random":
+            view_list = np.empty((num, 3))
+            for i in range(num):
+                view_list[i] = utils.uniform_sampling(3, 10, self.phi_min)
+        elif sampling_method  == "circular":
+            view_list = utils.sphere_sampling(longtitude_range = 16, latitude_range = 4,
+                                                   radius_start = self.radius_start, radius_end =self.radius_end)
+        return view_list
+    
+    def sort_view(self, view_list):
+        sorted_indices = np.lexsort((view_list[:,1], view_list[:,0], view_list[:,2]))
+        view_list = view_list[sorted_indices]
+        return view_list
+    
+    def record_running_time(self, record_type, index, exec_times):
+        if record_type == "uncertainty":
+            time_csv = f"{self.record_path}/uncertainty_time.csv"
+        elif record_type == "planning":
+            time_csv = f"{self.record_path}/planning_time.csv"
+        else:
+            time_csv = f"{self.record_path}/not_defined.csv"
+        
+        file_exists = os.path.isfile(time_csv)
+        if not file_exists:
+            with open(time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['idxs', 'times'])
+                writer.writerow([index, exec_times])  
+        else:
+            with open(time_csv, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([index, exec_times])

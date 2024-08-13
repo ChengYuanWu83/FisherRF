@@ -37,14 +37,27 @@ import time
 #     writer = csv.writer(file)
 #     writer.writerow(['iteration', 'loss', 'iteration_times'])
 
-def setup_csv(path):
-    training_time_csv = f"{path}/training_time.csv"
-    training_file_exists = os.path.isfile(training_time_csv)
-    if not training_file_exists:
-        with open(training_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['iterations', 'loss', 'times'])
-    return training_time_csv
+
+
+def setup_csv(path, record_type):
+    if record_type == "training":
+        training_time_csv = f"{path}/training_time.csv"
+        training_file_exists = os.path.isfile(training_time_csv)
+        if not training_file_exists:
+            with open(training_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['iterations', 'loss', 'times'])
+        return training_time_csv
+    elif record_type == "save_3dgs_time":
+        save_3dgs_time_csv = f"{path}/save_3dgs_time.csv"
+        file_exists = os.path.isfile(save_3dgs_time_csv)
+        if not file_exists:
+            with open(save_3dgs_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['idxs', 'iterations', 'times'])
+        return save_3dgs_time_csv
+    else:
+        return None
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -67,7 +80,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
 
-    training_time_csv = setup_csv(dataset.source_path)
+    training_time_saving_index = 0
+    training_time_saving_start = time.time()
+    if args.save_ply_per_time:
+        save_3dgs_time_csv = setup_csv(args.model_path,"save_3dgs_time")
+    training_time_csv = setup_csv(dataset.source_path,"training")
     traing_start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
@@ -84,6 +101,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     break
             except Exception as e:
                 network_gui.conn = None
+
+
+        trainig_end_time = time.time()
+        # [cyw]: conditional expressions
+        if args.save_ply_per_time and ((trainig_end_time - training_time_saving_start) > 10.0):
+            with open(save_3dgs_time_csv, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([training_time_saving_index, iteration, trainig_end_time - training_time_saving_start])
+            training_time_saving_index += 1
+            training_time_saving_start = time.time()
+            scene.save(iteration)
 
         iter_start.record()
 
@@ -232,10 +260,11 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--save_ply_per_time", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     

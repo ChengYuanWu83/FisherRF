@@ -20,6 +20,9 @@ from utils.loss_utils import ssim
 from lpipsPyTorch import lpips, lpips_func
 from active import methods_dict
 import wandb
+import csv
+import time
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -28,36 +31,27 @@ except ImportError:
 from utils.cluster_manager import ClusterStateManager
 
 #[cyw]:setup_csv
-def setup_csv(path):
-    training_time_csv = f"{path}/training_time.csv"
-    training_file_exists = os.path.isfile(training_time_csv)
-    if not training_file_exists:
+def setup_csv(path, record_type):
+    if record_type == "training":
+        training_time_csv = f"{path}/training_time.csv"
         with open(training_time_csv, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['iterations', 'loss', 'times'])
-    
-    algo_time_csv = f"{path}/algo_time.csv"
-    algo_file_exists = os.path.isfile(algo_time_csv)
-    if not algo_file_exists:
+        return training_time_csv
+    elif record_type == "algo":
+        algo_time_csv = f"{path}/algo_time.csv"
         with open(algo_time_csv, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(['select_idxs', 'times'])
-
-    flying_time_csv = f"{path}/flying_time.csv"
-    flying_file_exists = os.path.isfile(flying_time_csv)
-    if not flying_file_exists:
-        with open(flying_time_csv, mode='w', newline='') as file:
+            writer.writerow(['iterations', 'times'])
+        return algo_time_csv
+    elif record_type == "save_3dgs_time":
+        save_3dgs_time_csv = f"{path}/save_3dgs_time.csv"
+        with open(save_3dgs_time_csv, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(['pose_idxs', 'times'])
-
-    captured_time_csv = f"{path}/captured_time.csv"
-    captured_file_exists = os.path.isfile(captured_time_csv)
-    if not captured_file_exists:
-        with open(captured_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['pose_idxs', 'times'])
-
-    return training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv
+            writer.writerow(['idxs', 'iterations', 'times'])
+        return save_3dgs_time_csv
+    else:
+        return None
     
 
 csm = ClusterStateManager()
@@ -101,6 +95,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                       num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
                                       save_ply_each_time=args.save_ply_each_time)
     print(f"schema: {schema.load_its}")
+    saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
     scene.train_idxs = schema.init_views
 
     active_method = methods_dict[args.method](args)
@@ -125,6 +120,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    training_time_saving_start = time.time()
+    training_time_saving_index = 0
+    if args.save_ply_per_time:
+        save_3dgs_time_csv = setup_csv(args.model_path,"save_3dgs_time")
+    training_time_csv = setup_csv(args.model_path,"training")
+    algo_time_csv = setup_csv(args.model_path,"algo")
+    trainig_start_time = time.time()
+
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -141,15 +145,38 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             except Exception as e:
                 network_gui.conn = None
 
+
+        trainig_end_time = time.time()
+        # [cyw]: conditional expressions
+        if args.save_ply_per_time and ((trainig_end_time - training_time_saving_start) > 10.0):
+            with open(save_3dgs_time_csv, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([training_time_saving_index, iteration, trainig_end_time - training_time_saving_start])
+            training_time_saving_index += 1
+            training_time_saving_start = time.time()
+            scene.save(iteration)
+
         num_views = schema.num_views_to_add(iteration)
         if num_views > 0:
             try:
+
+                algo_start_time = time.time()
                 # For sectioned training
                 candidate_views_filter = getattr(schema, "candidate_views_filter")[iteration] if hasattr(schema, "candidate_views_filter") else None
                 scene.candidate_views_filter = candidate_views_filter
                 
                 # Because selection is time consumeing ({cyw}:uncertainty estimation callback function)
                 selected_views = active_method.nbvs(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
+                algo_end_time = time.time()
+                with open(algo_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([iteration, algo_end_time - algo_start_time])
+
+                with open(training_time_csv, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
+                trainig_start_time = time.time()
+            
             except RuntimeError as e:
                 print(e)
                 print("selector exited early")
@@ -237,7 +264,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         if (iteration in checkpoint_iterations):
             save_checkpoint(gaussians, iteration, scene)
-    wandb.finish()
+    trainig_end_time = time.time()
+    with open(training_time_csv, mode='a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
+    # wandb.finish()
 
         
 
@@ -290,18 +321,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and ((idx < 5) or log_every_image):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(idx), image[None], global_step=iteration)
-                        log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
+                        # log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(idx), gt_image[None], global_step=iteration)
-                            log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
+                            # log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                     ssim_test += ssim(image, gt_image).mean().double()
                     lpips.to(image.device)
                     lpips_test += lpips(image, gt_image).mean().double()
 
-                if log_every_image:
-                    wandb.log(log_images, step=iteration)
+                # if log_every_image:
+                #     wandb.log(log_images, step=iteration)
 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
@@ -316,12 +347,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - lpips', lpips_test, iteration)
                 log_dict = {config['name'] + '/l1_loss': l1_test, config['name'] + '/psnr': psnr_test,
                             config['name'] + '/ssim': ssim_test, config['name'] + '/lpips': lpips_test,}
-                wandb.log(log_dict, step=iteration)
+                # wandb.log(log_dict, step=iteration)
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
-            wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
+            # wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
         torch.cuda.empty_cache()
 
 import socket
@@ -368,6 +399,7 @@ if __name__ == "__main__":
     parser.add_argument("--maximum_view", type=int, default=10)
     parser.add_argument("--add_view", type=int, default=1)
     parser.add_argument("--save_ply_each_time", action="store_true")
+    parser.add_argument("--save_ply_per_time", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     if args.log_every_image:
@@ -380,7 +412,7 @@ if __name__ == "__main__":
 
     print("Optimizing " + args.model_path)
 
-    wandb.init(project='active', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
+    # wandb.init(project='active', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
 
     # Initialize system state (RNG)
     safe_state(args.quiet, seed=args.seed)

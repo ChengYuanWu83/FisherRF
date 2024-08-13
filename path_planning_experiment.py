@@ -43,38 +43,109 @@ from lpipsPyTorch import lpips, lpips_func
 from utils.image_utils import psnr
 import time
 import csv
+import threading
+
+#[cyw]: fly uav thread
+
+step = 0
+time_budget = 0
+traj = None
+def flying_uav(nbv_planner, update_train_event, traj_lock):
+    global time_budget
+    global step
+    step = 0 
+    pose_idxs = 0
+    flying_time_csv = setup_csv(nbv_planner.record_path, "flying")
+    captured_time_csv = setup_csv(nbv_planner.record_path, "captured")
+    while time_budget > 0:
+        print(f"time_budget remain:{time_budget}")
+        flying_start_time = time.time()
+        # have_plan = 0
+        # if update_path_event.is_set():
+        #     have_plan = 1
+        #     step = 0
+        #     update_path_event.clear()
+        #     continue
+        with traj_lock:
+            nbv = traj[step]
+            # if nbv_planner.sampling_method == "circular": #[cyw]:delete the selected view in sphere sampling
+            #     indices = np.array([not np.array_equal(row, nbv) for row in nbv_planner.candidate_view_list])
+            #     nbv_planner.candidate_view_list = nbv_planner.candidate_view_list[indices]
+            step +=1
+        print(f"nbv: {nbv}")
+        nbv_planner.move_sensor(nbv)  
+        
+        flying_end_time = time.time()
+
+        if time_budget - (flying_end_time - flying_start_time) < 0:
+            time_budget = 0
+            return 
+        #[cyw]:captured time
+        captured_start_time = time.time()
+        nbv_planner.store_train_set()
+        captured_end_time = time.time()
+        pose_idxs += 1
+                
+        time_budget -=  (captured_end_time - flying_start_time)
+
+        with open(flying_time_csv, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+
+        with open(captured_time_csv, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([pose_idxs, captured_end_time - captured_start_time]) 
+
+        update_train_event.set()
+
 
 #[cyw]:setup_csv
-def setup_csv(path):
-    training_time_csv = f"{path}/training_time.csv"
-    training_file_exists = os.path.isfile(training_time_csv)
-    if not training_file_exists:
-        with open(training_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['iterations', 'loss', 'times'])
+def setup_csv(path, record_type):
+    if record_type == "algo":
+        algo_time_csv = f"{path}/algo_time.csv"
+        algo_file_exists = os.path.isfile(algo_time_csv)
+        if not algo_file_exists:
+            with open(algo_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['iterations', 'times'])
+        return algo_time_csv
     
-    algo_time_csv = f"{path}/algo_time.csv"
-    algo_file_exists = os.path.isfile(algo_time_csv)
-    if not algo_file_exists:
-        with open(algo_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['select_idxs', 'times'])
+    elif record_type == "flying":
+        flying_time_csv = f"{path}/flying_time.csv"
+        flying_file_exists = os.path.isfile(flying_time_csv)
+        if not flying_file_exists:
+            with open(flying_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['pose_idxs', 'times'])
+        return flying_time_csv
 
-    flying_time_csv = f"{path}/flying_time.csv"
-    flying_file_exists = os.path.isfile(flying_time_csv)
-    if not flying_file_exists:
-        with open(flying_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['pose_idxs', 'times'])
+    elif record_type == "captured":
+        captured_time_csv = f"{path}/captured_time.csv"
+        captured_file_exists = os.path.isfile(captured_time_csv)
+        if not captured_file_exists:
+            with open(captured_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['pose_idxs', 'times'])
+        return captured_time_csv
 
-    captured_time_csv = f"{path}/captured_time.csv"
-    captured_file_exists = os.path.isfile(captured_time_csv)
-    if not captured_file_exists:
-        with open(captured_time_csv, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['pose_idxs', 'times'])
-
-    return training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv
+    elif record_type == "training":
+        training_time_csv = f"{path}/training_time.csv"
+        training_file_exists = os.path.isfile(training_time_csv)
+        if not training_file_exists:
+            with open(training_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['iterations', 'loss', 'times'])
+        return training_time_csv
+    elif record_type == "save_3dgs_time":
+        save_3dgs_time_csv = f"{path}/save_3dgs_time.csv"
+        file_exists = os.path.isfile(save_3dgs_time_csv)
+        if not file_exists:
+            with open(save_3dgs_time_csv, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['idxs', 'iterations', 'times'])
+        return save_3dgs_time_csv
+    else:
+        return None
     
 csm = ClusterStateManager()
 
@@ -108,28 +179,29 @@ def load_checkpoint(ckpt_path: str, gaussians, scene, opt, ignore_train_idxs=Fal
     return first_iter, base_iter
 
 
-def setup_random_seed(seed):
-    np.random.seed(seed)
+# def setup_random_seed(seed):
+#     np.random.seed(seed)
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     # planning experiment in simulator using baseline planners and our planner
 
-    setup_random_seed(10)
+    # setup_random_seed(10)
     
+    # initial experiment parameter
     experiment_path = dataset.source_path
+    global time_budget
+    global step
     time_budget = args.time_budget
     training_time_limit = args.training_time_limit
-    num_views_needed = args.maximum_view
+    sampling_method = args.sampling_method
+    sampling_num = args.sampling_num
+    planning_method = args.planning_method
     
     os.makedirs(experiment_path, exist_ok=True)
 
     print("---------- planning ----------")
-    
-    phi = 15 * (np.pi/180)
-    theta = 0.0
-    radius = 3
-    init_view = [phi, theta, radius]
+
 
     # [cyw]: setup planner type
     planner_type = args.planner_type
@@ -149,22 +221,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     planner_cfg["planner_type"] = planner_type
     planner_cfg["experiment_path"] = experiment_path
     planner_cfg["experiment_id"] = args.experiment_id #[cyw]: 
+    planner_cfg["radius_start"] = args.radius_start
+    planner_cfg["radius_end"] = args.radius_end
+    planner_cfg["sampling_method"] = sampling_method
+    planner_cfg["time_constraint"] = args.time_constraint
     print(planner_cfg)
     nbv_planner = get_planner(planner_cfg)
-    num_views_needed -= 1 
-    #[cyw]:flying time
-    flying_start_time = time.time()
+
+    global traj
+    traj = nbv_planner.first_plan(sampling_method, sampling_num) #first traj
+
+    phi = 15 * (np.pi/180)
+    theta = 0.0
+    radius = 4
+    init_view = [phi, theta, radius]
+    if sampling_method == "circular": 
+        init_view = traj[0]
+        traj = traj[1:]
+        # nbv_planner.candidate_view_list = np.delete(nbv_planner.candidate_view_list, 0, axis=0)
+    print(init_view)
+
+
     nbv_planner.start(initial_view=init_view)
-    flying_end_time = time.time()
-
-    #[cyw]:captured time
-    captured_start_time = time.time()
     nbv_planner.store_train_set()
-    captured_end_time = time.time()
 
-    time_budget = time_budget - (captured_end_time - flying_start_time)
+    # time_budget = time_budget - (captured_end_time - flying_start_time)
     
-    if args.planner_type != "ours" :
+    if planner_type != "ours" :
         nbv_planner.del_init_view(init_view)
     nbv_planner.store_test_set()
     # nbv = nbv_planner.plan_next_view()
@@ -181,17 +264,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
 
-    #[cyw]: setup schema
-    # schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
-    #                                   N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
-    #                                   num_init_views=args.num_init_views, interval_epochs=args.interval_epochs,
-    #                                   save_ply_each_time=args.save_ply_each_time, save_ply_after_last_adding=args.save_ply_after_last_adding)
-    # print(f"schema: {schema.load_its}")
-    #[cyw]: change to saving ply when adding the view
-    # saving_iterations = list(set(saving_iterations+schema.schema_ckpt))
-    # print(saving_iterations)
 
-    # print(f"scene.train_idxs: {scene.train_idxs}")
     init_ckpt_path = f"{args.model_path}/init.ckpt"
     if checkpoint: # this is to continue training in SLURM after requeue
         if os.path.exists(checkpoint):
@@ -203,15 +276,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         save_checkpoint(gaussians, first_iter, scene, base_iter, save_path=init_ckpt_path, save_last=False)
 
     #[cyw]:write csv
-    training_time_csv, algo_time_csv, flying_time_csv, captured_time_csv = setup_csv(args.model_path)
-    pose_idxs = 0 
-    with open(flying_time_csv, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow([pose_idxs, flying_end_time - flying_start_time])
+    training_time_csv = setup_csv(args.model_path,"training")
+    algo_time_csv = setup_csv(args.model_path,"algo")
+    training_time_saving_start = time.time() #for saving 3dgs
+    training_time_saving_index = 0 #for saving 3dgs
+    if args.save_ply_per_time:
+        save_3dgs_time_csv = setup_csv(args.model_path,"save_3dgs_time")
+    # pose_idxs = 0 
+    # with open(flying_time_csv, mode='a', newline='') as file:
+    #     writer = csv.writer(file)
+    #     writer.writerow([pose_idxs, flying_end_time - flying_start_time])
 
-    with open(captured_time_csv, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
+    # with open(captured_time_csv, mode='a', newline='') as file:
+    #     writer = csv.writer(file)
+    #     writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
     
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
@@ -224,7 +302,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    trainig_start_time = time.time()
+    
+    #[cyw]: open the flying thread
+
+    update_train_event = threading.Event() #check training set update event
+    # update_path_event = threading.Event() #check path update event
+    # planning_event = threading.Event() # wait for path planning
+    traj_lock = threading.Lock()
+    flying_thread = threading.Thread(target = flying_uav, args = (nbv_planner, update_train_event, traj_lock))
+    flying_thread.start()
+
+    
+    trainig_start_time = time.time() #for calculating training time.
+    experiment_params = {
+        "time_budget": time_budget,
+        "sampling_method": sampling_method,
+        "sampling_num": sampling_num,
+        "planning_method": planning_method,
+        "training_time_limit": training_time_limit
+    }
+
     for iteration in range(first_iter, opt.iterations + 1):        
         
         if network_gui.conn == None:
@@ -241,58 +338,48 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     break
             except Exception as e:
                 network_gui.conn = None
-        
+
+
         trainig_end_time = time.time()
         # [cyw]: conditional expressions
-        if (time_budget > 0) and ((trainig_end_time - trainig_start_time) > training_time_limit) and num_views_needed > 0:
+        if args.save_ply_per_time and ((trainig_end_time - training_time_saving_start) > 10.0):
+            training_time_saving_start = time.time()
+            with open(save_3dgs_time_csv, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([training_time_saving_index, iteration, trainig_end_time - training_time_saving_start])
+            training_time_saving_index += 1
+            scene.save(iteration)
+        if nbv_planner.need_to_update(time_budget, trainig_end_time - trainig_start_time, training_time_limit, ema_loss_for_log, traj, step):
             try:
+                print(f"time_budget remain in algo section:{time_budget}")
                 if args.save_ply_each_time:
                     scene.save(iteration)
-                print(f"Start choose the nbv after ITER { iteration}")
-                # For sectioned training
-                # candidate_views_filter = getattr(schema, "candidate_views_filter")[iteration] if hasattr(schema, "candidate_views_filter") else None
-                # scene.candidate_views_filter = candidate_views_filter
-                # Because selection is time consumeing ({cyw}:uncertainty estimation callback function)
+                
+                
                 num_views = 1
-                # [cyw]: select nbv          
-                # [cyw]:algorithm time
-                algo_start = time.time()
-                if args.planner_type == "ours" or args.planner_type == "fisher":
-                    nbv = nbv_planner.plan_next_view(gaussians, scene, num_views, pipe, background, exit_func=csm.should_exit)
+                # [cyw]:algo
+                # update_path_event.set()
+                algo_start_time = time.time()
+                print(f"Start planning the trajectory after ITER {iteration}")
+                traj_lock.acquire() 
+                if planner_type == "ours" or planner_type == "fisher":
+                    traj = nbv_planner.plan_path(gaussians, scene, num_views, pipe, background, experiment_params, exit_func=csm.should_exit)
                 else:
-                    nbv = nbv_planner.plan_next_view()
-                algo_end = time.time()
-
-                flying_start_time = time.time()
-                nbv_planner.move_sensor(nbv)
-                flying_end_time = time.time()
-                print(f"ITER {iteration}: NBV: {nbv}")
-
-                #[cyw]:captured time
-                captured_start_time = time.time()
-                nbv_planner.store_train_set()
-                captured_end_time = time.time()
-                pose_idxs += 1
-                with open(training_time_csv, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
+                    traj = nbv_planner.plan_path(sampling_method, sampling_num)  
+                step = 0
+                traj_lock.release() 
+                algo_end_time = time.time()
 
                 with open(algo_time_csv, mode='a', newline='') as file:
                     writer = csv.writer(file)
-                    writer.writerow([pose_idxs, algo_end - algo_start])
+                    writer.writerow([iteration, algo_end_time - algo_start_time])
 
-                with open(flying_time_csv, mode='a', newline='') as file:
+                with open(training_time_csv, mode='a', newline='') as file:
                     writer = csv.writer(file)
-                    writer.writerow([pose_idxs, flying_end_time - flying_start_time])
-
-                with open(captured_time_csv, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([pose_idxs, captured_end_time - captured_start_time])    
-
-                time_budget = time_budget - (captured_end_time - trainig_start_time)
-                num_views_needed -= 1 
-                trainig_start_time = time.time()
+                    writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
                 
+                trainig_start_time = time.time()
+
             except RuntimeError as e:
                 print(e)
                 print("selector exited early")
@@ -300,17 +387,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 save_checkpoint(gaussians, iteration - 1, scene)
                 csm.requeue()
 
-            #print(f"ITER {iteration}: selected views: {selected_views}")
-
+        if update_train_event.is_set(): # if the new image is collected, then trigger the event
             scene.train_idxs.extend([len(scene.train_idxs)])
             scene.add_new_cameras(args, nbv_planner.record_path)
-            
-            print(f"ITER {iteration}: training views after selection: {scene.train_idxs}")
+            print(f"ITER {iteration}: training views after update: {scene.train_idxs}")
 
             gaussians.optimizer.zero_grad(set_to_none = True)
-
             first_iter, _ = load_checkpoint(init_ckpt_path, gaussians, scene, opt, ignore_train_idxs=True)
             base_iter = iteration - 1
+
+            update_train_event.clear() 
 
         iter_start.record()
 
@@ -389,7 +475,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     with open(training_time_csv, mode='a', newline='') as file:
         writer = csv.writer(file)
         writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
-    wandb.finish()
+    # wandb.finish()
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -440,18 +526,18 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if tb_writer and ((idx < 5) or log_every_image):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(idx), image[None], global_step=iteration)
-                        log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
+                        # log_images[f"render/{idx:03d}"] = wandb.Image(image[None])
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(idx), gt_image[None], global_step=iteration)
-                            log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
+                            # log_images[f"gt/{idx:03d}"] = wandb.Image(gt_image.cpu()[None])
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                     ssim_test += ssim(image, gt_image).mean().double()
                     lpips.to(image.device)
                     lpips_test += lpips(image, gt_image).mean().double()
 
-                if log_every_image:
-                    wandb.log(log_images, step=iteration)
+                # if log_every_image:
+                    # wandb.log(log_images, step=iteration)
 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
@@ -466,12 +552,12 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - lpips', lpips_test, iteration)
                 log_dict = {config['name'] + '/l1_loss': l1_test, config['name'] + '/psnr': psnr_test,
                             config['name'] + '/ssim': ssim_test, config['name'] + '/lpips': lpips_test,}
-                wandb.log(log_dict, step=iteration)
+                # wandb.log(log_dict, step=iteration)
 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
-            wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
+            # wandb.log({'total_points': scene.gaussians.get_xyz.shape[0]}, step=iteration)
         torch.cuda.empty_cache()
 
 
@@ -482,9 +568,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     
     #[cyw]: planner_type options: all, random, fisher, ours
-    parser.add_argument(
-        "--planner_type", "-P", type=str, default="ours", help="planner_type"
-    )
+    parser.add_argument("--planner_type", "-P", type=str, default="ours", help="planner_type")
 
     parser.add_argument(
         "--model_name",
@@ -551,13 +635,13 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[15_000, 20_000, 25_000, 30_000]) # the iteration that evaluate metrics
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000]) # the iteration that save 3DGS.ply
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000]) # the iteration that save 3DGS.ply
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[]) # the iteration that save 3DGS ckpt
     parser.add_argument("--start_checkpoint", type=str, default = None)
     
     # fisherrf
-    parser.add_argument("--schema", type=str, default="all")
+    # parser.add_argument("--schema", type=str, default="all")
     parser.add_argument("--reg_lambda", type=float, default=1e-6)
     parser.add_argument("--sh_up_every", type=int, default=1_000, help="increase spherical harmonics every N iterations")  #[cyw]:fisher:5000, original 3DGS:1000
     parser.add_argument("--sh_up_after", type=int, default=-1, help="start to increate active_sh_degree after N iterations")   #[cyw]:fisher:-1, original 3DGS:-1
@@ -566,15 +650,17 @@ if __name__ == "__main__":
     parser.add_argument("--filter_out_grad", nargs="+", type=str, default=["rotation"])
 
     # experiment
-    parser.add_argument("--iteration_base", type=int, default=2000)
-    parser.add_argument("--num_init_views", type=int, default=1)
-    parser.add_argument("--interval_epochs", type=int, default=100)
-    parser.add_argument("--maximum_view", type=int, default=12)
-    parser.add_argument("--add_view", type=int, default=1)
+    parser.add_argument("--save_ply_per_time", action="store_true")
     parser.add_argument("--save_ply_each_time", action="store_true")
     parser.add_argument("--save_ply_after_last_adding", action="store_true")
-    parser.add_argument("--time_budget", type=float, default=10000.0, help="time budget")
-    parser.add_argument("--training_time_limit", type=float, default=10.0, help="training_time_limit")
+    parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
+    parser.add_argument("--training_time_limit", type=float, default=20.0, help="training_time_limit")
+    parser.add_argument("--sampling_method", type=str, required=True, default="random", help="the method that next viewport generator used")
+    parser.add_argument("--sampling_num", type=int, default=20, help="the number of the generated viewport")
+    parser.add_argument("--planning_method", type=str, default="a_star", help="the method planning trajectory for a set of viewports")
+    parser.add_argument("--radius_start", type=float, default=3.0, help="radius range")
+    parser.add_argument("--radius_end", type=float, default=10.0, help="radius range")
+    parser.add_argument("--time_constraint", type=float, default=1.0, help="the path planning time constraint")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -582,7 +668,7 @@ if __name__ == "__main__":
 
     print("Optimizing " + args.model_path)
 
-    wandb.init(project='Ours', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
+    # wandb.init(project='Ours', resume="allow", id=os.path.split(args.model_path.rstrip('/'))[-1], config=vars(args))
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
