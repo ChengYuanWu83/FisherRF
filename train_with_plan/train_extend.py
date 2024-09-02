@@ -8,6 +8,10 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+import subprocess as sp
+from threading import Thread , Timer
+import sched
+import nvidia_smi
 import sys
 import os
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -32,32 +36,31 @@ except ImportError:
 # [cyw]: record the csv in order to decide iterations time
 import csv
 import time
-# csv_file = 'training_loss.csv'
-# with open(csv_file, mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerow(['iteration', 'loss', 'iteration_times'])
-
 
 
 def setup_csv(path, record_type):
     if record_type == "training":
         training_time_csv = f"{path}/training_time.csv"
-        training_file_exists = os.path.isfile(training_time_csv)
-        if not training_file_exists:
-            with open(training_time_csv, mode='w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(['iterations', 'loss', 'times'])
+        with open(training_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['iterations', 'loss', 'times'])
         return training_time_csv
     elif record_type == "save_3dgs_time":
         save_3dgs_time_csv = f"{path}/save_3dgs_time.csv"
-        file_exists = os.path.isfile(save_3dgs_time_csv)
-        if not file_exists:
-            with open(save_3dgs_time_csv, mode='w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(['idxs', 'iterations', 'times'])
+        with open(save_3dgs_time_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['idxs', 'iterations', 'times'])
         return save_3dgs_time_csv
+    elif record_type == "gpu_usage":
+        gpu_usage_csv = f"{path}/gpu_usage.csv"
+        with open(gpu_usage_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['times', 'memory_used', 'memory_usage', 'gpu_usage'])
+        return gpu_usage_csv
     else:
         return None
+
+timer = None
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -68,6 +71,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
+
+    #[cyw]:store gpu usage
+    start_timer_time = time.time()
+    if args.record_gpu:
+        global timer
+        gpu_usage_csv = setup_csv(dataset.source_path,"gpu_usage")
+        nvidia_smi.nvmlInit()
+        timer = Timer(5.0, print_gpu_memory_every_5secs, args=(gpu_usage_csv, start_timer_time))
+        timer.start()
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -85,6 +97,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if args.save_ply_per_time:
         save_3dgs_time_csv = setup_csv(args.model_path,"save_3dgs_time")
     training_time_csv = setup_csv(dataset.source_path,"training")
+    training_start_time2 = time.time()
     traing_start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
@@ -104,6 +117,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
         trainig_end_time = time.time()
+        if not args.record_gpu:
+            if trainig_end_time - training_start_time2 > args.time_budget:
+                scene.save(iteration)
+                break
         # [cyw]: conditional expressions
         if args.save_ply_per_time and ((trainig_end_time - training_time_saving_start) > 10.0):
             with open(save_3dgs_time_csv, mode='a', newline='') as file:
@@ -189,6 +206,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+    if args.record_gpu:
+        timer.cancel()
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -211,6 +230,33 @@ def prepare_output_and_logger(args):
     else:
         print("Tensorboard not available: not logging progress")
     return tb_writer
+
+
+def print_gpu_memory_every_5secs(gpu_usage_csv, start_timer_time):
+    """
+        This function calls itself every 5 secs and print the gpu_memory.
+    """
+    end_time = time.time()
+    deviceCount = nvidia_smi.nvmlDeviceGetCount()
+    print(deviceCount)
+    for i in range(deviceCount):
+        handle = nvidia_smi.nvmlDeviceGetHandleByIndex(i)
+        util = nvidia_smi.nvmlDeviceGetUtilizationRates(handle)
+        mem = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+        free_mem = mem.free/1024**2
+        total_mem = mem.total/1024**2
+        gpu_util = util.gpu/100.0
+        mem_util = util.memory/100.0
+        with open(gpu_usage_csv, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            #'times', 'memory_used', 'memory_usage', 'gpu_usage'
+            writer.writerow([end_time-start_timer_time, total_mem-free_mem, mem_util, gpu_util])
+        print(f"|Device {i}| Mem Free: {free_mem:5.2f}MB / {total_mem:5.2f}MB | gpu-util: {gpu_util:3.1%} | gpu-mem: {mem_util:3.1%} |")
+    global timer
+    timer = Timer(5, print_gpu_memory_every_5secs, args=(gpu_usage_csv,start_timer_time))
+    timer.start()
+
+
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
     if tb_writer:
@@ -260,11 +306,14 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[10_000,30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--save_ply_per_time", action="store_true")
+    parser.add_argument("--time_budget", type=float, default=50)
+    parser.add_argument("--record_gpu", action="store_true")
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     

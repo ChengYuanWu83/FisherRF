@@ -1,13 +1,13 @@
 declare -a index_set=(1)
 # 0.08: 4s, 0.04: 2s,0.02:1s, 0.01:0.5s, 0.005:0.25s
-declare -a time_constraints=(0.0002 0.002 0.2) #0.08 0.04 0.02 0.01 0.005 
+declare -a time_constraints=(0.02) #0.08 0.04 0.02 0.01 0.005 
 # declare -a scheduling_num_set=(3)
 declare -a scheduling_windows=(50) #25 50 75 100
-declare -a sampling_methods=("random") 
+declare -a sampling_methods=("circular") 
 declare -a sampling_numbers=(10) #5 10 20 40 80
-declare -a algorithms=("dp") # "astar" "dp" "all" "fisher" 
+declare -a algorithms=("all") # "astar" "dp" "all" "fisher" 
 
-scene=cabin
+scene=car
 total_iteration=15000
 baseline_iteration=30000
 initial_training_time=1
@@ -35,21 +35,16 @@ do
                         DATASET_PATH=/home/nmsl/nbv_simulator_data/$exp_name
                         EXP_PATH=/home/nmsl/FisherRF/exp_results/$exp_name
                         echo "$exp_name"
-                        if [ $algo == "dp" ] || [ $algo == "astar" ]; then
-                            python path_planning_scheduling_window.py -s $DATASET_PATH -m ${EXP_PATH} \
-                                --iterations $total_iteration --eval \
-                                --planner_type ours --sampling_method $sampling_method --sampling_num $sampling_number --planning_method $algo\
-                                --scheduling_window $scheduling_window --initial_training_time $initial_training_time\
-                                --radius_start 4 --radius_end 10 --time_constraint $time_constraint\
-                                --white_background --flying_time_budget $capture_budget --train_time_budget $training_budget --experiment_id $id
-                                # --white_background --save_ply_after_last_adding --save_ply_each_time 
-                        elif [ $algo == "all" ]; then
-                            python ./train_with_plan/drone_capture_scheudling_window.py --experiment_path $DATASET_PATH\
-                                --scheduling_window $scheduling_window --initial_training_time $initial_training_time\
-                                --set_type train --sampling_method $sampling_method --views_num $sampling_number\
-                                --record --radius_start 4 --radius_end 10 --time_budget $capture_budget --experiment_id $id 
+                        if [ $algo == "dp" ]; then
                             python ./train_with_plan/train_extend.py -s $DATASET_PATH -m $EXP_PATH --iterations $baseline_iteration \
-                                --white_background --eval --time_budget $training_budget 
+                                --white_background --eval --time_budget $training_budget --record_gpu
+                        elif [ $algo == "all" ]; then
+                            # python ./train_with_plan/drone_capture_scheudling_window.py --experiment_path $DATASET_PATH\
+                            #     --scheduling_window $scheduling_window --initial_training_time $initial_training_time\
+                            #     --set_type train --sampling_method $sampling_method --views_num $sampling_number\
+                            #     --record --radius_start 4 --radius_end 10 --time_budget $capture_budget --experiment_id $id
+                            python ./train_with_plan/train_extend.py -s $DATASET_PATH -m $EXP_PATH --iterations $baseline_iteration \
+                                --white_background --eval --time_budget $training_budget --record_gpu
                         elif [ $algo == "fisher" ]; then        
                             cp -r /home/nmsl/nbv_simulator_data/${sampling_method}_all_T${scheduling_window}_tf${time_constraint}_sn${sampling_number}_${scene}_id${id} $DATASET_PATH 
 
@@ -70,7 +65,7 @@ do
                             python ./train_with_plan/active_train_bvs.py -s $DATASET_PATH -m $EXP_PATH\
                                 --iterations $baseline_iteration --eval --method=H_reg --schema test\
                                 --num_init_views 1 --interval_epochs 300 --maximum_view $file_count\
-                                --add_view 1 --iteration_base 0 --white_background --time_budget $training_budget
+                                --add_view 1 --iteration_base 0 --white_background --time_budget $training_budget --record_gpu
                         fi
                         # i=$exp_name
                         if [ -d "$DATASET_PATH/test" ]; then

@@ -1,3 +1,7 @@
+import subprocess as sp
+from threading import Thread , Timer
+import sched
+import nvidia_smi
 import os
 import sys
 
@@ -50,6 +54,12 @@ def setup_csv(path, record_type):
             writer = csv.writer(file)
             writer.writerow(['idxs', 'iterations', 'times'])
         return save_3dgs_time_csv
+    elif record_type == "gpu_usage":
+        gpu_usage_csv = f"{path}/gpu_usage.csv"
+        with open(gpu_usage_csv, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['times', 'memory_used', 'memory_usage', 'gpu_usage'])
+        return gpu_usage_csv
     else:
         return None
     
@@ -89,6 +99,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     
+    #[cyw]:store gpu usage
+    start_timer_time = time.time()
+    if args.record_gpu:
+        global timer
+        gpu_usage_csv = setup_csv(dataset.source_path,"gpu_usage")
+        nvidia_smi.nvmlInit()
+        timer = Timer(5.0, print_gpu_memory_every_5secs, args=(gpu_usage_csv, start_timer_time))
+        timer.start()
+
     # Active View Selection
     schema = schema_dict[args.schema](dataset_size=len(scene.getTrainCameras()), scene=scene,
                                       N=args.maximum_view, M=args.add_view, iteration_base=args.iteration_base,
@@ -128,7 +147,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     training_time_csv = setup_csv(args.model_path,"training")
     algo_time_csv = setup_csv(args.model_path,"algo")
     trainig_start_time = time.time()
-
+    training_start_time2 = time.time()
     for iteration in range(first_iter, opt.iterations + 1):        
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -147,6 +166,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
         trainig_end_time = time.time()
+        if not args.record_gpu:
+            if trainig_end_time - training_start_time2 > args.time_budget:
+                scene.save(iteration)
+                break
         # [cyw]: conditional expressions
         if args.save_ply_per_time and ((trainig_end_time - training_time_saving_start) > 10.0):
             with open(save_3dgs_time_csv, mode='a', newline='') as file:
@@ -268,6 +291,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     with open(training_time_csv, mode='a', newline='') as file:
         writer = csv.writer(file)
         writer.writerow([iteration, ema_loss_for_log, trainig_end_time - trainig_start_time])
+
+    if args.record_gpu:
+        timer.cancel()
     # wandb.finish()
 
         
@@ -364,6 +390,30 @@ def find_free_port():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.getsockname()[1]
 
+def print_gpu_memory_every_5secs(gpu_usage_csv, start_timer_time):
+    """
+        This function calls itself every 5 secs and print the gpu_memory.
+    """
+    end_time = time.time()
+    deviceCount = nvidia_smi.nvmlDeviceGetCount()
+    print(deviceCount)
+    for i in range(deviceCount):
+        handle = nvidia_smi.nvmlDeviceGetHandleByIndex(i)
+        util = nvidia_smi.nvmlDeviceGetUtilizationRates(handle)
+        mem = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+        free_mem = mem.free/1024**2
+        total_mem = mem.total/1024**2
+        gpu_util = util.gpu/100.0
+        mem_util = util.memory/100.0
+        with open(gpu_usage_csv, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            #'times', 'memory_used', 'memory_usage', 'gpu_usage'
+            writer.writerow([end_time-start_timer_time, total_mem-free_mem, mem_util, gpu_util])
+        print(f"|Device {i}| Mem Free: {free_mem:5.2f}MB / {total_mem:5.2f}MB | gpu-util: {gpu_util:3.1%} | gpu-mem: {mem_util:3.1%} |")
+    global timer
+    timer = Timer(5, print_gpu_memory_every_5secs, args=(gpu_usage_csv,start_timer_time))
+    timer.start()
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
@@ -375,7 +425,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[15_000, 20_000, 25_000, 30_000]) # the iteration that evaluate metrics
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[2700, 7_000, 30_000]) # the iteration that save 3DGS.ply
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1799, 30_000]) # the iteration that save 3DGS.ply
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[]) # the iteration that save 3DGS ckpt
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -400,6 +450,8 @@ if __name__ == "__main__":
     parser.add_argument("--add_view", type=int, default=1)
     parser.add_argument("--save_ply_each_time", action="store_true")
     parser.add_argument("--save_ply_per_time", action="store_true")
+    parser.add_argument("--time_budget", type=float, default=50)
+    parser.add_argument("--record_gpu", action="store_true")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     if args.log_every_image:

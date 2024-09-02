@@ -7,7 +7,7 @@ import random
 from gaussian_renderer import render, network_gui, modified_render
 from scene import Scene
 from planner.planner import Planner
-from planner.utils import view_to_pose_batch, random_view, uniform_sampling, view_to_cam, view_to_xyz
+from planner.utils import view_to_pose_with_target_point, random_view, uniform_sampling, view_to_cam, view_to_xyz,rotation_2_quaternion
 import pandas as pd
 import time
 import threading
@@ -19,12 +19,15 @@ class OursPlanner(Planner):
         super().__init__(cfg)
         self.num_candidates = cfg["num_candidates"]
         self.view_change = cfg["view_change"]
-        self.planning_type = cfg["planning_type"]
+        self.planning_type = cfg["planning_type"] #local or global
+        self.planning_method = cfg["planning_method"]
         self.time_constraint = cfg["time_constraint"]
+        self.scheduling_window = cfg["scheduling_window"]
+
         self.timeout_flag = False
         self.view_index = 0
         self.candidate_view_list = None
-        self.first_update = 0
+        self.first_update = 1
 
         #self.seed = args.seed
         self.reg_lambda = 1e-6
@@ -233,7 +236,7 @@ class OursPlanner(Planner):
         return  acq_scores.tolist()
 
     def first_plan(self, sampling_method, num):
-        view_list = self.sampling_view(sampling_method, num)
+        view_list = self.sampling_view(sampling_method, num, 0)
         if sampling_method  == "circular":
             self.candidate_view_list = view_list
             view_list = self.candidate_view_list[self.view_index:self.view_index+num]
@@ -243,25 +246,44 @@ class OursPlanner(Planner):
         print(view_list)
         return view_list
 
-    def plan_path(self, gaussians, scene: Scene, num_views, pipe, background, experiment_params, exit_func):
+    def plan_path(self, gaussians, scene: Scene, num_views, pipe, background, exit_func):
         required_uncer = 1
 
-        time_budget = experiment_params["time_budget"]
-        sampling_method = experiment_params["sampling_method"]
-        sampling_num = experiment_params["sampling_num"]
-        planning_method = experiment_params["planning_method"]
-        training_time_limit = experiment_params["training_time_limit"]
+        # time_budget = experiment_params["time_budget"]
+        sampling_method = self.sampling_method
+        sampling_num = self.sampling_num
+        planning_method = self.planning_method
+        scheduling_window = self.scheduling_window
 
         uncer_start = time.time()
         if sampling_method  == "random":
             view_list = self.sampling_view(sampling_method, sampling_num)
         elif sampling_method  == "circular":
-            view_list = self.candidate_view_list[self.view_index:self.view_index+sampling_num]
-            self.view_index += sampling_num
+            if self.planning_time == 0:
+                self.candidate_view_list = self.sampling_view(sampling_method, sampling_num)
+            
+            base = self.planning_time * 80
+            if self.planning_time > 7:
+                base = ((self.planning_time % 8) - 1) * 80 + 40
+            view_list = self.candidate_view_list[base:base+sampling_num]
+            # self.view_index += sampling_num
+        print(view_list)
+        
+
         candidate_cams = []
+        view_list_stored = []
         # [cyw]: transform random_view(phi, theta) to cam in order to get the novel view
         for view in view_list:
             candidate_cams.append(view_to_cam(view, self.camera_info))
+            pose = view_to_pose_with_target_point(view)
+            rotation = rotation_2_quaternion(pose[:3, :3])
+            translation = pose[:3, -1]
+            view_list_stored.append([*translation, *rotation])
+
+        df = pd.DataFrame(view_list_stored)
+        sampling__list_header = ['x', 'y', 'z', 'qx', 'qy', 'qz','qw']
+        df.to_csv(f'{self.record_path}/sampling_list_{self.planning_time}.csv', index=False, header=sampling__list_header)
+
 
         uncertainty = self.nbvs(gaussians, scene, num_views, pipe, background, candidate_cams, exit_func, required_uncer)
         uncertainty = np.nan_to_num(uncertainty, nan=0.0)
@@ -308,11 +330,11 @@ class OursPlanner(Planner):
         if planning_method == "dp": 
             print("start DP planning")
             # max_util, best_path = self.find_max_utility_with_dp(uncertainty, distance_matrix, training_time_limit)
-            max_util, best_path = find_max_utility_with_test(uncertainty, distance_matrix, training_time_limit, self.time_constraint)
+            max_util, best_path = find_max_utility_with_test(uncertainty, distance_matrix, scheduling_window, self.time_constraint)
 
-        elif planning_method == "a_star":
+        elif planning_method == "astar":
             print("start A* planning")
-            max_util, best_path = max_utility_with_a_star(uncertainty, distance_matrix, training_time_limit)
+            max_util, best_path = max_utility_with_a_star(uncertainty, distance_matrix, scheduling_window)
         else:
             print("unknown planning method, use random")
             return view_list
@@ -329,16 +351,22 @@ class OursPlanner(Planner):
 
         return traj
     
-    def need_to_update(self, time_budget, training_time, training_time_limit, loss, view_list, step):
-        if view_list is None:
-            return True
-        
-        if self.first_update == 1 and loss < 0.065 and training_time > 1.0:
+    def need_to_update(self, time_budget, training_time, scheduling_window, initial_training_time, view_list, step):
+
+        # if self.first_update == 1 and loss < 0.065 and training_time > 1.0: #update from loss
+        #     self.first_update = 0 
+        #     print("first_update")
+        #     return True
+        if self.first_update == 1 and training_time > initial_training_time: #update from time
             self.first_update = 0 
             print("first_update")
             return True
-            
-        if time_budget > 0 and (training_time > training_time_limit or step == len(view_list) - 1):
+        
+        if view_list is None:
+            # print(training_time)
+            return False
+
+        if time_budget > 0 and (training_time > scheduling_window or step == len(view_list) - 1):
             return True
         
         return False

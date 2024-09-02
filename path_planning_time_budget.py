@@ -654,7 +654,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_ply_each_time", action="store_true")
     parser.add_argument("--save_ply_after_last_adding", action="store_true")
     parser.add_argument("--time_budget", type=float, default=100.0, help="time budget")
-    parser.add_argument("--training_time_limit", type=float, default=20.0, help="training_time_limit")
+    parser.add_argument("--training_time_limit", type=float, default=30.0, help="training_time_limit")
     parser.add_argument("--sampling_method", type=str, required=True, default="random", help="the method that next viewport generator used")
     parser.add_argument("--sampling_num", type=int, default=20, help="the number of the generated viewport")
     parser.add_argument("--planning_method", type=str, default="a_star", help="the method planning trajectory for a set of viewports")

@@ -1,11 +1,11 @@
-declare -a index_set=(1)
+declare -a index_set=(2 3 4 5)
 # 0.08: 4s, 0.04: 2s,0.02:1s, 0.01:0.5s, 0.005:0.25s
-declare -a time_constraints=(0.0002 0.002 0.2) #0.08 0.04 0.02 0.01 0.005 
+declare -a time_constraints=(0.02) #0.08 0.04 0.02 0.01 0.005 
 # declare -a scheduling_num_set=(3)
 declare -a scheduling_windows=(50) #25 50 75 100
-declare -a sampling_methods=("random") 
+declare -a sampling_methods=("random") # "circular" "random"
 declare -a sampling_numbers=(10) #5 10 20 40 80
-declare -a algorithms=("dp") # "astar" "dp" "all" "fisher" 
+declare -a algorithms=("astar" "dp" "all" "fisher" ) # "astar" "dp" "all" "fisher" 
 
 scene=cabin
 total_iteration=15000

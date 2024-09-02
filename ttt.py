@@ -1,28 +1,20 @@
 import numpy as np 
-from planner.planner import Planner
+from planner.utils import uniform_sampling, xyz_to_view
 import pandas as pd
 import os
 import csv
 
+# views_num = 20
+# scheduling_num = 3
+# radius_start = 4
+# radius_end = 10
+# phi_min = 0.2617
+# main_size = int(views_num) * int(scheduling_num)
+# main_view_list = np.empty((main_size, 3))
+# for i in range(main_size):
+#     seed = i
+#     main_view_list[i] = uniform_sampling(radius_start, radius_end, phi_min, seed)
 
-
-# x = 123
-# y =888
-
-# algo_time_csv = f"./algo_time.csv"
-# # algo_file_exists = os.path.isfile(algo_time_csv)
-# # if not algo_file_exists:
-# with open(algo_time_csv, mode='w', newline='') as file:
-#     writer = csv.writer(file)
-#     writer.writerow(['iterations', 'times'])
-#     writer.writerow([x, y])
-
-
-x = np.array([1231230,789,978,78,55,4])
-i= [np.argmin(x)]
-
-y = x[1:]
-if len(y) == 0:
-    print("123")
-print(i)
-print(y)
+# print(main_view_list)
+x =11
+print(((x % 10) - 1) * 80 + 40)

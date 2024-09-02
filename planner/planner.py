@@ -15,9 +15,12 @@ class Planner:
     def __init__(self, cfg):
         #[cyw]: my parameter
         self.planning_time = 0
+        self.sampling_method = cfg["sampling_method"]
+        self.sampling_num = cfg["sampling_num"]
+        self.scheduling_num =cfg["scheduling_num"]
         self.radius_start = cfg["radius_start"]
         self.radius_end = cfg["radius_end"]
-        self.sampling_method = cfg["sampling_method"]
+        self.experiment_id = cfg["experiment_id"]
 
         self.simulator_bridge = SimulatorBridge(cfg["simulation_bridge"])
         self.camera_info = self.simulator_bridge.camera_info
@@ -102,7 +105,9 @@ class Planner:
         while not self.simulator_bridge.check_if_uav_arrive(pub_pose): #[cyw]: check if uav reach
             pass
         time.sleep(2.5)
-
+        drone_pose = self.simulator_bridge.get_current_ros_pose_in_list()
+        sub_time = time.time()
+        # pub_pose
         os.makedirs(self.record_path, exist_ok = True)
         csv_file = (f"{self.record_path}/target_uav_pose.csv")
         file_exists = os.path.isfile(csv_file)
@@ -111,6 +116,16 @@ class Planner:
             if not file_exists:
                 writer.writerow(['timestamp','x', 'y', 'z', 'qx', 'qy', 'qz','qw'])
             pose_for_csv = [pub_time, *pub_pose]
+            writer.writerow(pose_for_csv)
+        # drone actual pose
+        os.makedirs(self.record_path, exist_ok = True)
+        csv_file = (f"{self.record_path}/actual_uav_pose.csv")
+        file_exists = os.path.isfile(csv_file)
+        with open(csv_file, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['timestamp','x', 'y', 'z', 'qx', 'qy', 'qz','qw'])
+            pose_for_csv = [sub_time, *drone_pose[0], *drone_pose[1]]
             writer.writerow(pose_for_csv)
         self.step += 1
 
@@ -254,9 +269,13 @@ class Planner:
     def sampling_view(self, sampling_method, num):
         if sampling_method  == "random":
             view_list = np.empty((num, 3))
+            N = self.planning_time
+            R = self.experiment_id
+            base = N * 10000 + R * 200
             for i in range(num):
-                view_list[i] = utils.uniform_sampling(3, 10, self.phi_min)
+                view_list[i] = utils.uniform_sampling(self.radius_start, self.radius_end, self.phi_min, base+i)
         elif sampling_method  == "circular":
+            # [cyw]: need to think how to deal with sample list question
             view_list = utils.sphere_sampling(longtitude_range = 16, latitude_range = 4,
                                                    radius_start = self.radius_start, radius_end =self.radius_end)
         return view_list

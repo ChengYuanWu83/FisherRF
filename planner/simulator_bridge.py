@@ -124,6 +124,7 @@ class SimulatorBridge:
                         self.current_pose.orientation.w]
         elif self.current_pose is None:
             print("isnone")
+            return self.get_current_ros_pose_in_list()
         else:
             print("don't know")
         return current_position, current_orientation

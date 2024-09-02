@@ -1,11 +1,11 @@
-declare -a index_set=(1)
+declare -a index_set=(2 3 4 5)
 # 0.08: 4s, 0.04: 2s,0.02:1s, 0.01:0.5s, 0.005:0.25s
-declare -a time_constraints=(0.0002 0.002 0.2) #0.08 0.04 0.02 0.01 0.005 
+declare -a time_constraints=(0.02) #0.08 0.04 0.02 0.01 0.005 
 # declare -a scheduling_num_set=(3)
 declare -a scheduling_windows=(50) #25 50 75 100
-declare -a sampling_methods=("random") 
+declare -a sampling_methods=("circular") # "circular" "random"
 declare -a sampling_numbers=(10) #5 10 20 40 80
-declare -a algorithms=("dp") # "astar" "dp" "all" "fisher" 
+declare -a algorithms=("astar" "dp") # "astar" "dp" "all" "fisher" 
 
 scene=cabin
 total_iteration=15000
@@ -47,7 +47,7 @@ do
                             python ./train_with_plan/drone_capture_scheudling_window.py --experiment_path $DATASET_PATH\
                                 --scheduling_window $scheduling_window --initial_training_time $initial_training_time\
                                 --set_type train --sampling_method $sampling_method --views_num $sampling_number\
-                                --record --radius_start 4 --radius_end 10 --time_budget $capture_budget --experiment_id $id 
+                                --record --radius_start 7 --radius_end 10 --time_budget $capture_budget --experiment_id $id 
                             python ./train_with_plan/train_extend.py -s $DATASET_PATH -m $EXP_PATH --iterations $baseline_iteration \
                                 --white_background --eval --time_budget $training_budget 
                         elif [ $algo == "fisher" ]; then        
