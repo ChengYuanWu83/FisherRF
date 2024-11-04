@@ -263,7 +263,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     theta = 0.0
     radius = 4
     init_view = [phi, theta, radius]
-    # if args.sampling_method == "circular": 
+    # if args.sampling_method == "": 
     #     init_view = traj[0]
     #     traj = traj[1:]
         # nbv_planner.candidate_view_list = np.delete(nbv_planner.candidate_view_list, 0, axis=0)

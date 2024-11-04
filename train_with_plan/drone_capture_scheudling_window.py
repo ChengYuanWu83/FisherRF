@@ -175,7 +175,7 @@ if __name__ == "__main__":
     #         main_view_list[i] = uniform_sampling(args.radius_start, args.radius_end, args.phi_min,i)
     # elif sampling_method == "circular":
     if sampling_method == "circular":    
-        main_view_list = sphere_sampling_unorder(longtitude_range = 36, latitude_range = 4,
+        main_view_list = sphere_sampling_unorder(longtitude_range = 16, latitude_range = 4,
                                     radius_start = args.radius_start, radius_end = args.radius_end) 
 
 
